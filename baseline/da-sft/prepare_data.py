@@ -35,9 +35,10 @@ def convert(decisions: list[dict], scene_splits: dict[str, str],
     for index, row in enumerate(bar):
         split = scene_splits[row["scene_id"]]
         by_split[split] += 1
-        if progress and (index + 1) % 128 == 0:
+        if progress and ((index + 1) % 128 == 0 or index + 1 == len(decisions)):
             bar.set_postfix(train=by_split["train"], val=by_split["val"],
-                            test=by_split["test"], refresh=False)
+                            test=by_split["test"],
+                            refresh=index + 1 == len(decisions))
         result[split].append({
             "prompt": row["prompt"],
             "completion": [{
@@ -55,9 +56,6 @@ def convert(decisions: list[dict], scene_splits: dict[str, str],
             "action": row["reference_action"]["action"],
             "generation_mode": row["generation_mode"],
         })
-    if progress:
-        bar.set_postfix(train=by_split["train"], val=by_split["val"],
-                        test=by_split["test"], refresh=True)
     return result, metadata
 
 
