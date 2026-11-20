@@ -34,10 +34,39 @@ dependency and no fall-back to the old trainer.
   one completion per reward-row. 4 Judge requests run in parallel by
   default. Judge uses Alibaba `qwen3.7-flash` with thinking disabled;
   policy Qwen3 thinking stays at its default (not forcibly disabled).
-- **Dataset**: unchanged offline Parquet `dataset/data/da-grpo/train.parquet`.
+- **Dataset**: method-local Parquet `baseline/da-grpo/data/train.parquet` prepared from unified base JSONL.
   Policy sees exactly one original Orchestra-o1 Main-Agent user prompt.
   Ground truth, Stage 3/4 reference action, and other expert metadata
   are separate dataset columns passed to the **reward only**.
+
+## Prepare DA-GRPO data from the environment base
+
+`environment.data_export` now emits generic `cases.jsonl`,
+`decisions.jsonl` and `private/decision_labels.jsonl` only. It does
+not produce DA-GRPO or DA-SFT Parquet and does not split data.
+
+From the repository root, after running the unified exporter:
+
+```bash
+python baseline/da-grpo/prepare_data.py \
+  --source-dir environment/data/unified \
+  --output-dir baseline/da-grpo/data
+python baseline/da-grpo/train.py --check
+```
+
+DA-GRPO's converter owns filtering, Scene-level 80/10/10 splits, and reward
+metadata. It produces `train.parquet`, `val.parquet`, `test.parquet`,
+`splits.json`, `quality_report.json`, `summary.json` **under
+`baseline/da-grpo/data/`**. The policy input remains the single O1
+user prompt; `ground_truth`, `expert_params`, `subtask_history` and
+other Judge metadata exist in reward-only columns, not in the prompt.
+
+To exactly reuse DA-SFT's frozen Scene assignment, pass
+`--split-map baseline/da-sft/data/splits.json`. Default reviewed-only
+filter excludes template and fallback actions, with explicit
+`--include-fallback` available for ablation. Untrusted recovery variants
+remain grouped with their originating Scene. Inspect the baseline-local
+quality report before training; never silently deduplicate or truncate.
 
 ## Install (new environment recommended)
 
