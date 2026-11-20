@@ -1,3 +1,17 @@
+## Frozen Global Judge inputs
+
+`prepare-grpo` now reads the private Scene/World and pre-decision
+Claim snapshots solely from `environment/data/unified/private/`.
+The verified sidecars are copied into `DA_DATA/private/`, with
+immutable hashes checked again at training/preflight. Stage1/4
+generation folders are no longer inputs to the Global Judge.
+
+To upgrade an older unified dataset without rebuilding decisions, run
+`python -m environment.data_export.private_context` using its original
+hash-matched Stage1/Stage4 inputs. See `run/README.md` for commands.
+
+---
+
 ## Dual-GPU GRPO smoke test (1 rollout GPU + 1 trainer GPU)
 
 The default `train_maestro_8b/policy/grpo_config.yaml` contains
