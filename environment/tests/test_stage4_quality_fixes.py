@@ -1,0 +1,134 @@
+"""Regression checks for Stage-4 public claims and outcome-aware selection."""
+from __future__ import annotations
+
+import unittest
+
+from environment.untrusted_orchestration.reporting.surface import render_records
+from environment.untrusted_orchestration.inspection.claim_comparison import (
+    report_claim_conflicts,
+)
+from environment.untrusted_orchestration.orchestration.main_decision_contract import (
+    build_main_decision_contract,
+)
+from environment.untrusted_orchestration.scenario.candidate_selection import (
+    select_recovered_candidates,
+)
+
+
+def report(rows, summary):
+    return {"finish_result": {
+        "status": "done", "result": render_records([
+            {"values": values, "source_fact_refs": ["src:F001"]}
+            for values in rows
+        ]), "summary": summary,
+    }}
+
+
+class ReportClaimComparisonTests(unittest.TestCase):
+    def test_clean_decimal_and_text_are_not_cut_at_period(self):
+        clean = report(
+            [{"latitude_a": 46.653836, "city": "Dunhaven District"}],
+            'summary records latitude a = 46.653836. '
+            'city = "Dunhaven District".',
+        )
+        self.assertEqual(report_claim_conflicts(clean), [])
+        corrupted = report([{"latitude_a": 46.653836}],
+                           "summary records latitude a = 46.123456.")
+        conflicts = report_claim_conflicts(corrupted)
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["summary_value"], "46.123456")
+        self.assertEqual(conflicts[0]["result_value"], "46.653836")
+
+    def test_multirow_subjectless_claim_is_not_a_conflict(self):
+        result = report(
+            [{"case_id": "Case-001", "score": 4},
+             {"case_id": "Case-002", "score": 8}],
+            "summary records score = 12.",
+        )
+        self.assertEqual(report_claim_conflicts(result), [])
+        result["finish_result"]["summary"] = "Case-001: score = 8."
+        conflicts = report_claim_conflicts(result)
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]["subject"], "Case-001")
+        result["finish_result"]["summary"] = "Case-002: score = 8."
+        self.assertEqual(report_claim_conflicts(result), [])
+
+    def test_critic_and_runtime_share_identical_public_witness(self):
+        handoff = report([{"latitude_a": 46.653836}],
+                         "summary records latitude a = 46.123456.")
+        contract = build_main_decision_contract(
+            [{"attempt": 1, "subtask_results": [handoff]}],
+            [{"operation": "verify_conflicting_evidence",
+              "target_fields": ["latitude_a"],
+              "main_visible_justification": "Verify latitude a"}],
+            number_of_tasks=1,
+        )
+        self.assertEqual(
+            len(contract["visible_evidence"]["confirmed_result_summary_conflicts"]), 1,
+        )
+        contract_clean = build_main_decision_contract(
+            [{"attempt": 1, "subtask_results": [
+                report([{"latitude_a": 46.653836}],
+                       "summary records latitude a = 46.653836.")
+            ]}],
+            [{"operation": "verify_conflicting_evidence",
+              "target_fields": ["latitude_a"],
+              "main_visible_justification": "Verify latitude a"}],
+            number_of_tasks=1,
+        )
+        self.assertEqual(
+            contract_clean["visible_evidence"]["confirmed_result_summary_conflicts"], [],
+        )
+
+
+class QualitySelectionTests(unittest.TestCase):
+    def test_global_budget_prioritizes_real_impact_and_novelty(self):
+        plans, journals = [], []
+        outcomes = [
+            ("completed", False), ("blocked", False),
+            ("completed", True), ("completed", True),
+        ]
+        for i, (status, correct) in enumerate(outcomes):
+            plans.append({
+                "index": i, "sample_id": f"q{i}-candidate-0",
+                "task_id": f"q{i}", "branch_round": 2, "faults": [],
+                "scenario_plan": {
+                    "fault_atoms": [{"kind": "wrong_retrieval"}],
+                },
+            })
+            journals.append({
+                "status": "recovered",
+                "episode": {"trajectory": [
+                    {"attempt": 2, "action": "delegate_task"},
+                ]},
+                "private_audit": {
+                    "execution_outcome": "recovered",
+                    "counterfactual_unrepaired": {
+                        "status": status, "correct": correct,
+                    },
+                    "runtime": {},
+                    "evidence_plan": [{
+                        "evidence_requests": [{
+                            "operation": "retry_missing_evidence",
+                            "target_fields": ["project_id"],
+                            "authorized_source_ids": ["src"],
+                        }],
+                    }],
+                },
+            })
+        selected, rows, summary = select_recovered_candidates(
+            plans, journals, max_selected_per_round=None,
+            strategy="global_balanced", target_main_turns=10,
+        )
+        self.assertIn(0, selected)
+        self.assertIn(1, selected)
+        # Redundant routine consistency-only policies must not fill
+        # the remaining Main-turn budget.
+        self.assertEqual(len(selected & {2, 3}), 1)
+        self.assertLess(summary["estimated_selected_main_turns"], 10)
+        self.assertEqual(rows[0]["answer_impact"], "answer_changing")
+        self.assertEqual(rows[1]["answer_impact"], "completion_blocked")
+
+
+if __name__ == "__main__":
+    unittest.main()
