@@ -256,7 +256,7 @@ def _visibility_issues(
                 if confirmed_report_conflicts is None:
                     from .inspection.claim_comparison import report_claim_conflicts
                     confirmed_report_conflicts = [
-                        finding
+                        {**finding, "observed_round": batch.get("attempt")}
                         for batch in entries
                         for report in batch.get("subtask_results", [])
                         if isinstance(report, dict)
@@ -265,6 +265,9 @@ def _visibility_issues(
                 if not any(
                     finding["field"] == verification_focus.get("attribute")
                     and finding["subject"] == verification_focus.get("subject")
+                    and (verification_focus.get("observed_round") is None
+                         or finding["observed_round"] ==
+                         verification_focus["observed_round"])
                     for finding in confirmed_report_conflicts
                 ):
                     missing.append(request["request_id"] + ":unseen_verification_focus")
