@@ -13,9 +13,7 @@ perform this one-time provenance-checked upgrade:
 
 ```bash
 python -m environment.data_export.private_context \
-  --unified-dir environment/data/unified \
-  --scenes PATH/TO/ORIGINAL/stage1/questions/scenes.jsonl \
-  --stage4-dir PATH/TO/ORIGINAL/stage4
+  --unified-dir environment/data/unified
 ```
 
 The source paths must match the SHA256 hashes in the unified manifest.
