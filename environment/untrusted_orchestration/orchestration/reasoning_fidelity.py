@@ -93,7 +93,7 @@ def reasoning_evidence_issues(
         field = next(iter(direct))
         spelling = field.replace("_", " ")
         if not any(re.search(
-            r"(?<!\\w)" + re.escape(name) + r"(?!\\w)",
+            r"(?<!\w)" + re.escape(name) + r"(?!\w)",
             reasoning, re.I,
         ) for name in (field, spelling)):
             return ["missing_specific_verification_focus:" + field]
