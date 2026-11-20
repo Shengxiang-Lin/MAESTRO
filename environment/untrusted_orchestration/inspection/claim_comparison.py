@@ -136,6 +136,12 @@ def report_claim_conflicts(
         for match, claimed in _explicit_values(summary, field):
             prefix = summary[max(0, match.start() - 100):match.start()]
             selected = _subject_rows(prefix, rows)
+            if (selected is None and field in _SUBJECT_FIELDS
+                    and re.search(r"\bsummary\s+records?\s*$", prefix, re.I)):
+                # An explicit returned-identifier list is a set-membership
+                # assertion. Its missing identifier is observable without
+                # guessing which measurement belongs to which row.
+                selected = rows
             if selected is None:
                 continue
             values = [
@@ -153,7 +159,7 @@ def report_claim_conflicts(
                 "subject": (str(next(
                     (selected[0]["values"][name] for name in _SUBJECT_FIELDS
                      if name in selected[0]["values"]), "single_record"))
-                    if len(selected) == 1 else "unknown"),
+                    if len(selected) == 1 else "returned_record_set"),
                 "result_value": ", ".join(_display(x) for x in values[:8]),
                 "summary_value": _display(claimed),
                 "source_fact_refs": sorted({
