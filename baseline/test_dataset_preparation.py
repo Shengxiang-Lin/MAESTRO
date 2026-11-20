@@ -167,10 +167,8 @@ class BaselineDataPreparationTests(unittest.TestCase):
                         row["reward_model"]["ground_truth"],
                         row["extra_info"]["answer"],
                     )
-                    self.assertNotIn(
-                        row["reward_model"]["ground_truth"],
-                        row["prompt"][0]["content"],
-                    )
+                    self.assertNotIn("extra_info", row["prompt"][0])
+                    self.assertNotIn("reward_model", row["prompt"][0])
             with self.assertRaises(FileExistsError):
                 sft.prepare(src, sft_out)
 
