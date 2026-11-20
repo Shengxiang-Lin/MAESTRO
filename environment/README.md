@@ -77,3 +77,16 @@ not by a model asserting that it recovered.
 - `untrusted_orchestration/`: Stage-4 fault execution, causal repair,
   evidence state supervision, naturalization, publication
 - `configs/`: one stable YAML per function, shared output layout
+
+
+## Unified base dataset (separate from training adapters)
+
+`python -m environment.data_export` publishes unsplit generic
+`cases.jsonl`, `decisions.jsonl`, and
+`private/decision_labels.jsonl` into `environment/data/unified/`.
+It does **not** produce DA-SFT/DA-GRPO Parquets or select
+train/val/test Scenes. See `environment/data_export/README.md`.
+
+Each baseline invokes its own `prepare_data.py`, chooses a frozen Scene
+split, filters eligible reference actions and writes its own
+`baseline/<method>/data/` training files.

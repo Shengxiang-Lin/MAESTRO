@@ -1,8 +1,8 @@
-"""Unified MAESTRO paired Case and Main-decision dataset export.
+"""Export MAESTRO method-agnostic paired Cases and Main decisions.
 
-Private case labels and gold/reward state NEVER enter the O1 policy prompt.
-Stage3 clean and Stage4 fault variants share one Scene-level split.
-No LLM calls are made by this exporter.
+This environment layer publishes *unsplit* JSONL and source provenance only.
+Every baseline owns its own filtering, Scene split and trainer-specific format.
+Private gold/reward state never enters the policy prompt.
 """
 from __future__ import annotations
 
@@ -14,16 +14,15 @@ import json
 from pathlib import Path
 import shutil
 
-from dataset.prepare_da_grpo import (
-    digest, make_examples, read_jsonl, settings_for,
-)
-from .splits import load_splits, make_splits, verify_splits
+from environment.base_orchestration.o1_compat import o1_prompt_from_turn
+from environment.base_orchestration.trajectory_builder import _answer_text
+from .source_io import digest, read_jsonl, settings_for
+from .audit import audit_dataset, audit_output
 
 CASE_SCHEMA = "maestro.paired_case.v1"
 DECISION_SCHEMA = "maestro.main_decision.v1"
 LABEL_SCHEMA = "maestro.decision_teacher.v1"
 DATASET_SCHEMA = "maestro.dataset.v1"
-SPLITS = ("train", "val", "test")
 
 
 def _sha(value) -> str:
@@ -75,10 +74,10 @@ def _check_clean(clean: dict, scene_id: str, scene: dict):
     return ref
 
 
-def _case_for_clean(scene: dict, episode: dict, split: str):
+def _case_for_clean(scene: dict, episode: dict):
     return {
         "schema": CASE_SCHEMA, "case_id": "clean:" + scene["task_id"],
-        "scene_id": scene["task_id"], "split": split,
+        "scene_id": scene["task_id"],
         "question": scene["question"],
         "clean_reference_id": episode["clean_reference_id"],
         "kind": "clean",
@@ -99,7 +98,7 @@ def _case_for_clean(scene: dict, episode: dict, split: str):
 
 def _case_for_branch(
     scene: dict, clean: dict, entry: dict, journal: dict, *,
-    split: str, published: bool,
+    published: bool,
 ):
     scenario_id = entry["round_sample_id"]
     audit = journal.get("private_audit") or {}
@@ -127,7 +126,6 @@ def _case_for_branch(
         "schema": CASE_SCHEMA,
         "case_id": scenario_id,
         "scene_id": scene["task_id"],
-        "split": split,
         "question": scene["question"],
         "clean_reference_id": clean["clean_reference_id"],
         "kind": "fault_injected",
@@ -174,9 +172,7 @@ def _case_for_branch(
     }
 
 
-def _stage4_cases(
-    stage4_dir: Path, scenes: dict, clean: dict, splits: dict,
-):
+def _stage4_cases(stage4_dir: Path, scenes: dict, clean: dict):
     index_path = stage4_dir / "round_index.jsonl"
     if not index_path.is_file():
         raise FileNotFoundError("stage4_round_index_missing:" + str(index_path))
@@ -206,7 +202,7 @@ def _stage4_cases(
             raise ValueError("stage4_scene_without_clean_pair:" + scene_id)
         case = _case_for_branch(
             scenes[scene_id], clean[scene_id], item, data,
-            split=splits[scene_id], published=case_id in published,
+            published=case_id in published,
         )
         if case is not None:
             cases.append(case)
@@ -223,114 +219,99 @@ def _stage4_cases(
 
 def _build_decisions(
     sources: list[tuple[str, list[dict], dict]],
-    scenes: dict, splits: dict, published_cases: set,
-    states: dict,
-    *, require_llm: bool,
-):
-    rows, private_rows, grpo_rows, sft_rows = [], [], [], []
-    seen: set[str] = set()
+    scenes: dict[str, dict],
+    published_cases: set[str],
+    private_states: dict,
+) -> tuple[list[dict], list[dict]]:
+    """Reconstruct exact O1 prompts; do not filter labels for any trainer."""
+    decisions, teacher = [], []
+    identities = set()
+    case_rounds = set()
     for stage, turns, settings in sources:
-        if stage == "stage3":
-            examples, _, _ = make_examples(
-                scenes, turns, source=stage, settings=settings,
-                seen=seen, require_llm=require_llm,
-            )
-            index = _index(turns, "sample_id", "stage3_main_turn")
-            prepared = [
-                (example, index[example["extra_info"]["sample_id"]])
-                for example in examples
-            ]
-        else:
-            # The original Stage4 display sample_id is NOT unique across
-            # multiple one-fault variants of the same fork/decision round.
-            # round_sample_id is the explicit and immutable candidate key.
-            from train_maestro_8b.data.export_da_grpo import convert
-            index = {}
-            for turn in turns:
-                key = (turn.get("round_sample_id"), turn.get("round"))
-                if (not isinstance(key[0], str) or type(key[1]) is not int
-                        or key in index):
-                    raise ValueError("duplicate_or_missing_stage4_decision_key")
-                index[key] = turn
-            if turns:
-                examples, _, _ = convert(
-                    list(scenes.values()), turns, settings,
-                    reviewed_only=require_llm,
-                )
-            else:
-                examples = []
-            prepared = []
-            for example in examples:
-                key = (
-                    example["extra_info"]["sample_id"].rsplit(
-                        "-decision-round-", 1
-                    )[0],
-                    example["extra_info"]["step_index"],
-                )
-                if key not in index:
-                    raise ValueError("stage4_candidate_round_join_mismatch")
-                prepared.append((example, index[key]))
-        for example, turn in prepared:
-            ident = example["extra_info"]["sample_id"]
-            scene_id = turn["task_id"]
-            split = splits[scene_id]
-            if stage == "stage4":
-                case_id = turn.get("round_sample_id")
-                if case_id not in published_cases:
-                    raise ValueError("stage4_turn_without_published_case")
-            else:
+        for turn in turns:
+            scene_id = turn.get("task_id")
+            if scene_id not in scenes:
+                raise ValueError("decision_unknown_scene:" + str(scene_id))
+            number = turn.get("round")
+            if type(number) is not int or not 1 <= number <= settings["max_attempts"]:
+                raise ValueError("decision_invalid_round")
+            if stage == "stage3":
+                sample_id = turn.get("sample_id")
+                if sample_id != f"{scene_id}-round-{number:02d}":
+                    raise ValueError("stage3_sample_id_round_mismatch")
                 case_id = "clean:" + scene_id
-            ref = deepcopy(turn["output"])
-            if (not isinstance(ref, dict)
-                    or set(ref) != {"action", "reasoning", "params"}):
-                raise ValueError("incomplete_reference_main_action:" + ident)
-            decision = {
+                decision_id = "stage3:" + sample_id
+                source = "clean"
+            elif stage == "stage4":
+                case_id = turn.get("round_sample_id")
+                if not isinstance(case_id, str) or case_id not in published_cases:
+                    raise ValueError("stage4_turn_without_published_case")
+                decision_id = f"stage4:{case_id}:round:{number:02d}"
+                source = "untrusted"
+            else:
+                raise ValueError("unknown_decision_source")
+            if decision_id in identities or (case_id, number) in case_rounds:
+                raise ValueError("duplicate_case_decision:" + decision_id)
+            identities.add(decision_id)
+            case_rounds.add((case_id, number))
+            ref = deepcopy(turn.get("output"))
+            if (not isinstance(ref, dict) or
+                    set(ref) != {"action", "reasoning", "params"} or
+                    ref["action"] not in {"delegate_task", "complete"} or
+                    not isinstance(ref["reasoning"], str) or
+                    not ref["reasoning"].strip() or
+                    not isinstance(ref["params"], dict)):
+                raise ValueError("invalid_reference_action:" + decision_id)
+            if ref["action"] == "delegate_task":
+                if not isinstance(ref["params"].get("tasks"), list) or not ref["params"]["tasks"]:
+                    raise ValueError("invalid_reference_delegation:" + decision_id)
+            elif not isinstance(ref["params"].get("answer"), str):
+                raise ValueError("invalid_reference_completion:" + decision_id)
+            state = turn.get("input")
+            if not isinstance(state, dict) or set(state) != {"subtask_history"}:
+                raise ValueError("invalid_main_visible_history:" + decision_id)
+            if not isinstance(state["subtask_history"], str):
+                raise ValueError("invalid_main_visible_history_text")
+            scene = scenes[scene_id]
+            prompt = o1_prompt_from_turn(
+                scene, turn,
+                max_attempts=settings["max_attempts"],
+                sub_model=settings["sub_model"],
+                model_alias=settings["model_alias"],
+            )
+            decisions.append({
                 "schema": DECISION_SCHEMA,
-                "decision_id": stage + ":" + ident,
+                "decision_id": decision_id,
                 "case_id": case_id,
                 "scene_id": scene_id,
-                "split": split,
-                "source": "clean" if stage == "stage3" else "untrusted",
-                "decision_round": turn["round"],
-                "generation_mode": turn.get("generation_mode"),
-                "prompt": deepcopy(example["prompt"]),
+                "source": source,
+                "decision_round": number,
+                "generation_mode": turn.get("generation_mode", "unknown"),
+                "question": scene["question"],
+                "visible_state": {"subtask_history": state["subtask_history"]},
+                "prompt": [{"role": "user", "content": prompt}],
                 "reference_action": ref,
-            }
-            rows.append(decision)
-            reward = deepcopy(example)
-            reward["extra_info"] = {
-                **reward["extra_info"],
-                "case_id": case_id, "decision_id": decision["decision_id"],
-                "split": split,
-            }
-            grpo_rows.append((split, reward))
-            sft_rows.append((split, {
-                "prompt": deepcopy(example["prompt"]),
-                "completion": [{
-                    "role": "assistant",
-                    "content": json.dumps(ref, ensure_ascii=False),
-                }],
-            }))
-            private_rows.append({
+            })
+            # Explicitly private common teacher state, NOT trainer-specific
+            # reward metadata and NEVER included in model-visible prompts.
+            teacher.append({
                 "schema": LABEL_SCHEMA,
-                "decision_id": decision["decision_id"],
-                "scene_id": scene_id, "case_id": case_id,
-                "split": split,
-                "reference_action": ref,
+                "decision_id": decision_id,
+                "scene_id": scene_id,
+                "case_id": case_id,
+                "ground_truth": _answer_text(scene),
+                "reference_action": deepcopy(ref),
                 "reward_state": deepcopy(
-                    states.get((case_id, turn["round"]))
+                    private_states.get((case_id, number))
                 ) if stage == "stage4" else None,
             })
-    return rows, private_rows, grpo_rows, sft_rows
+    return decisions, teacher
 
 
 def export_dataset(
     *, scenes_path: Path, clean_episodes_path: Path,
     clean_turns_path: Path, stage4_dir: Path, output_dir: Path,
-    seed: int = 17, ratios=(0.8, 0.1, 0.1),
-    split_map_path: Path | None = None,
-    require_llm: bool = True, parquet: bool = False,
-    overwrite: bool = False,
+    overwrite: bool = False, strict_conflicts: bool = False,
 ) -> dict:
     paths = [Path(p) for p in (
         scenes_path, clean_episodes_path, clean_turns_path,
@@ -345,107 +326,59 @@ def export_dataset(
         "stage4": settings_for(stage4_dir / "main_turns.jsonl",
                                paths[0], "stage4"),
     }
-    scenes_list = read_jsonl(paths[0])
-    scenes = _index(scenes_list, "task_id", "scene")
-    clean_list = read_jsonl(paths[1])
-    clean = _index(clean_list, "task_id", "stage3_clean_episode")
+    scenes = _index(read_jsonl(paths[0]), "task_id", "scene")
+    clean = _index(read_jsonl(paths[1]), "task_id", "stage3_clean_episode")
     for scene_id, episode in clean.items():
         if scene_id not in scenes:
             raise ValueError("stage3_unknown_scene")
         _check_clean(episode, scene_id, scenes[scene_id])
     if not clean:
         raise ValueError("empty_clean_episode_collection")
-    if split_map_path is None:
-        split_data = make_splits(clean, seed=seed, ratios=ratios)
-    else:
-        split_data = load_splits(split_map_path, clean)
-    splits = verify_splits(split_data, clean)
     cases = [
-        _case_for_clean(scenes[scene_id], episode, splits[scene_id])
+        _case_for_clean(scenes[scene_id], episode)
         for scene_id, episode in sorted(clean.items())
     ]
-    branches, counts = _stage4_cases(
-        stage4_dir, scenes, clean, splits,
-    )
+    branches, status_counts = _stage4_cases(stage4_dir, scenes, clean)
     cases.extend(branches)
-    accepted_cases = {
+    accepted = {
         item["case_id"] for item in branches
         if item["recovery"]["globally_recovered"]
     }
-    private_states = {}
-    states_file = stage4_dir / "private" / "decision_reward_states.jsonl"
-    if states_file.is_file():
-        for state in read_jsonl(states_file):
+    states = {}
+    path = stage4_dir / "private" / "decision_reward_states.jsonl"
+    if path.is_file():
+        for state in read_jsonl(path):
             key = (state["round_sample_id"], state["decision_round"])
-            if key in private_states:
-                raise ValueError("duplicate_stage4_decision_reward_state")
-            private_states[key] = state["state"]
+            if key in states:
+                raise ValueError("duplicate_stage4_reward_snapshot")
+            states[key] = state["state"]
     clean_turns = read_jsonl(paths[2])
-    if any(turn.get("task_id") not in clean for turn in clean_turns):
+    if any(item.get("task_id") not in clean for item in clean_turns):
         raise ValueError("stage3_turn_without_accepted_clean_case")
-    decisions, labels, grpo, sft = _build_decisions(
-        [
-            ("stage3", clean_turns, source_settings["stage3"]),
-            ("stage4", read_jsonl(stage4_dir / "main_turns.jsonl"),
-             source_settings["stage4"]),
-        ], scenes, splits, accepted_cases, private_states,
-        require_llm=require_llm,
-    )
+    decisions, labels = _build_decisions([
+        ("stage3", clean_turns, source_settings["stage3"]),
+        ("stage4", read_jsonl(stage4_dir / "main_turns.jsonl"),
+         source_settings["stage4"]),
+    ], scenes, accepted, states)
     if not decisions:
-        raise ValueError("no_valid_main_training_decisions")
+        raise ValueError("no_main_decisions")
+    quality = audit_dataset(cases, decisions, labels)
+    if strict_conflicts and quality["conflicting_prompt_groups"]:
+        raise ValueError("conflicting_labels_for_identical_prompt")
     if output_dir.exists() and any(output_dir.iterdir()):
         if not overwrite:
-            raise FileExistsError(
-                "dataset_output_exists_use_new_dir_or_explicit_overwrite"
-            )
+            raise FileExistsError("dataset_output_exists_use_new_dir_or_explicit_overwrite")
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    _write_json(output_dir / "splits.json", split_data)
-    for name in SPLITS:
-        _write_jsonl(
-            output_dir / "cases" / (name + ".jsonl"),
-            (row for row in cases if row["split"] == name),
-        )
-        _write_jsonl(
-            output_dir / "decisions" / (name + ".jsonl"),
-            (row for row in decisions if row["split"] == name),
-        )
-        _write_jsonl(
-            output_dir / "private" / "decision_labels" /
-            (name + ".jsonl"),
-            (row for row in labels if row["split"] == name),
-        )
-        _write_jsonl(
-            output_dir / "adapters" / "da-grpo" / (name + ".jsonl"),
-            (row for split, row in grpo if split == name),
-        )
-        _write_jsonl(
-            output_dir / "adapters" / "da-sft" / (name + ".jsonl"),
-            (row for split, row in sft if split == name),
-        )
-        if parquet:
-            try:
-                import pyarrow as pa
-                import pyarrow.parquet as pq
-            except ImportError as exc:
-                raise RuntimeError(
-                    "Parquet adapter requires pyarrow"
-                ) from exc
-            for adapter, payload in (("da-grpo", grpo), ("da-sft", sft)):
-                selected = [row for split, row in payload if split == name]
-                if selected:
-                    path = (output_dir / "adapters" / adapter /
-                            (("eval" if name == "val" and adapter == "da-sft"
-                              else name) + ".parquet"))
-                    pq.write_table(pa.Table.from_pylist(selected), path)
-    distribution = Counter(row["split"] for row in decisions)
-    case_distribution = Counter(row["split"] for row in cases)
-    source_distribution = Counter(row["source"] for row in decisions)
-    fault_types = Counter(
-        ((case["fault"]["atoms"][0].get("kind") or "unknown")
-         if case["fault"]["atoms"] else "unknown")
-        for case in cases if case["kind"] == "fault_injected"
-    )
+    _write_jsonl(output_dir / "cases.jsonl", cases)
+    _write_jsonl(output_dir / "decisions.jsonl", decisions)
+    _write_jsonl(output_dir / "private" / "decision_labels.jsonl", labels)
+    # Validate persisted base records; method adapters belong to baseline/*.
+    on_disk = audit_output(output_dir)
+    if on_disk != quality:
+        raise RuntimeError("base_data_quality_round_trip_mismatch")
+    _write_json(output_dir / "quality_report.json", quality)
+    counts = Counter(row["source"] for row in decisions)
     result = {
         "schema": DATASET_SCHEMA,
         "source_sha256": {
@@ -453,39 +386,32 @@ def export_dataset(
             "clean_episodes": digest(paths[1]),
             "clean_turns": digest(paths[2]),
             "stage4_manifest": digest(stage4_dir / "manifest.json"),
-            "stage4_published_episodes": digest(
-                stage4_dir / "episodes.jsonl"
-            ),
-            "stage4_main_turns": digest(
-                stage4_dir / "main_turns.jsonl"
+            "stage4_published_episodes": digest(stage4_dir / "episodes.jsonl"),
+            "stage4_main_turns": digest(stage4_dir / "main_turns.jsonl"),
+        },
+        "base_file_sha256": {
+            "cases.jsonl": digest(output_dir / "cases.jsonl"),
+            "decisions.jsonl": digest(output_dir / "decisions.jsonl"),
+            "private/decision_labels.jsonl": digest(
+                output_dir / "private/decision_labels.jsonl"
             ),
         },
-        "splits_sha256": _sha(split_data),
-        "scene_counts": split_data["counts"],
-        "case_counts": dict(sorted(case_distribution.items())),
-        "decision_counts": dict(sorted(distribution.items())),
-        "decision_sources": dict(sorted(source_distribution.items())),
+        "scene_count": len(clean),
+        "case_count": len(cases),
+        "decision_count": len(decisions),
+        "decision_sources": dict(sorted(counts.items())),
+        "stage4_journal_outcomes": dict(sorted(status_counts.items())),
+        "accepted_fault_cases": len(accepted),
         "missing_decision_reward_states": sum(
-            row["source"] == "untrusted" and
+            decisions[i]["source"] == "untrusted" and
             labels[i]["reward_state"] is None
-            for i, row in enumerate(decisions)
+            for i in range(len(decisions))
         ),
-        "unscorable_decision_reward_states": sum(
-            row["source"] == "untrusted" and
-            isinstance(labels[i]["reward_state"], dict) and
-            labels[i]["reward_state"].get("scorable") is False
-            for i, row in enumerate(decisions)
-        ),
-        "stage4_journal_outcomes": dict(sorted(counts.items())),
-        "accepted_fault_cases": len(accepted_cases),
-        "fault_case_types": dict(sorted(fault_types.items())),
-        "clean_cases": sum(case["kind"] == "clean" for case in cases),
-        "require_llm": require_llm,
-        "parquet": parquet,
+        "quality_report": "quality_report.json",
         "label_policy": (
-            "Private fault and recovery state only in paired Cases and "
-            "private/decision_labels; O1 prompts rebuilt exactly from "
-            "public turn history. Never concatenate labels into prompts."
+            "Cases and private teacher state are offline supervision only; "
+            "Main policy input is decisions[*].prompt. Methods own all "
+            "split/filter/Parquet/reward transformations."
         ),
     }
     _write_json(output_dir / "manifest.json", result)
@@ -494,28 +420,17 @@ def export_dataset(
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    for arg in ("scenes", "clean-episodes", "clean-turns",
-                "stage4-dir", "output-dir"):
-        parser.add_argument("--" + arg, type=Path, required=True)
-    parser.add_argument("--split-map", type=Path)
-    parser.add_argument("--seed", type=int, default=17)
-    parser.add_argument("--train-ratio", type=float, default=0.8)
-    parser.add_argument("--val-ratio", type=float, default=0.1)
-    parser.add_argument("--allow-template", action="store_true")
-    parser.add_argument("--parquet", action="store_true")
+    for name in ("scenes", "clean-episodes", "clean-turns",
+                 "stage4-dir", "output-dir"):
+        parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--strict-conflicts", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args(argv)
-    ratio = (args.train_ratio, args.val_ratio,
-             1 - args.train_ratio - args.val_ratio)
     result = export_dataset(
-        scenes_path=args.scenes,
-        clean_episodes_path=args.clean_episodes,
-        clean_turns_path=args.clean_turns,
-        stage4_dir=args.stage4_dir,
-        output_dir=args.output_dir, ratios=ratio,
-        split_map_path=args.split_map,
-        seed=args.seed, require_llm=not args.allow_template,
-        parquet=args.parquet, overwrite=args.overwrite,
+        scenes_path=args.scenes, clean_episodes_path=args.clean_episodes,
+        clean_turns_path=args.clean_turns, stage4_dir=args.stage4_dir,
+        output_dir=args.output_dir, overwrite=args.overwrite,
+        strict_conflicts=args.strict_conflicts,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

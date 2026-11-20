@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from dataset.prepare_da_grpo import digest, read_jsonl
+from environment.data_export.source_io import digest, read_jsonl
 from environment.base_orchestration.trajectory_builder import build_episode
 from environment.data_export.export import export_dataset
 from environment.data_export.splits import (
@@ -138,14 +138,16 @@ class PairedDatasetEndToEndTests(unittest.TestCase):
                 clean_episodes_path=paths["clean"],
                 clean_turns_path=paths["turns"],
                 stage4_dir=stage4, output_dir=out,
-                require_llm=False,
             )
             self.assertEqual(manifest["accepted_fault_cases"], 2)
-            splits = json.loads(
-                (out / "splits.json").read_text(encoding="utf-8")
-            )["scene_to_split"]
-            case_split = splits[scene_id]
-            cases = read_jsonl(out / "cases" / (case_split + ".jsonl"))
+            quality = json.loads(
+                (out / "quality_report.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(quality["decision_count"],
+                             manifest["decision_count"])
+            self.assertEqual(quality["source_counts"]["untrusted"],
+                             manifest["decision_sources"]["untrusted"])
+            cases = read_jsonl(out / "cases.jsonl")
             paired = next(row for row in cases if row["case_id"] == cid)
             self.assertEqual(paired["clean"], clean_rows[0])
             self.assertEqual(paired["untrusted"]["episode"], ep)
@@ -153,9 +155,9 @@ class PairedDatasetEndToEndTests(unittest.TestCase):
             self.assertTrue(paired["recovery"]["globally_recovered"])
             self.assertEqual(paired["clean_reference_id"],
                              ep["clean_reference_id"])
-            decisions = read_jsonl(
-                out / "decisions" / (case_split + ".jsonl")
-            )
+            self.assertTrue(all("split" not in x for x in cases))
+            decisions = read_jsonl(out / "decisions.jsonl")
+            labels = read_jsonl(out / "private/decision_labels.jsonl")
             target = [row for row in decisions if row["case_id"] == cid]
             self.assertEqual(len(target), len(turns))
             sibling = [row for row in decisions if row["case_id"] == cid2]
@@ -163,41 +165,29 @@ class PairedDatasetEndToEndTests(unittest.TestCase):
             self.assertTrue(set(row["decision_id"] for row in target).isdisjoint(
                 {row["decision_id"] for row in sibling}
             ))
-            self.assertEqual({
-                row["source"] for row in target
-            }, {"untrusted"})
             self.assertTrue(all(
                 row["prompt"][0]["role"] == "user" and
-                "subtask_history" not in row["prompt"][0] and
-                "private_audit" not in row["prompt"][0]["content"]
-                for row in target
+                "private_audit" not in row["prompt"][0]["content"] and
+                "split" not in row
+                for row in decisions
             ))
-            # All Scene variants inherit the one frozen allocation.
-            for split in ("train", "val", "test"):
-                for row in read_jsonl(
-                    out / "decisions" / (split + ".jsonl")
-                ):
-                    self.assertEqual(row["split"], splits[row["scene_id"]])
-                sft = read_jsonl(
-                    out / "adapters/da-sft" / (split + ".jsonl")
-                )
-                self.assertTrue(all(
-                    set(row) == {"prompt", "completion"} for row in sft
-                ))
-                for row in read_jsonl(
-                    out / "adapters/da-grpo" / (split + ".jsonl")
-                ):
-                    self.assertEqual(row["extra_info"]["split"], split)
-                    self.assertEqual(
-                        row["prompt"][0]["role"], "user",
-                    )
+            self.assertEqual(len(labels), len(decisions))
+            self.assertTrue(all(
+                x["ground_truth"] and "split" not in x for x in labels
+            ))
+            self.assertFalse((out / "splits.json").exists())
+            self.assertFalse((out / "adapters").exists())
+            self.assertEqual(set(manifest["base_file_sha256"]), {
+                "cases.jsonl", "decisions.jsonl",
+                "private/decision_labels.jsonl",
+            })
+
             with self.assertRaises(FileExistsError):
                 export_dataset(
                     scenes_path=paths["scenes"],
                     clean_episodes_path=paths["clean"],
                     clean_turns_path=paths["turns"],
                     stage4_dir=stage4, output_dir=out,
-                    require_llm=False,
                 )
 
     def test_invalid_case_clean_fingerprint_is_rejected(self):
@@ -221,7 +211,7 @@ class PairedDatasetEndToEndTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "clean_reference"):
             _case_for_branch(
                 scene, clean, index, journal,
-                split="train", published=True,
+                published=True,
             )
 
 
