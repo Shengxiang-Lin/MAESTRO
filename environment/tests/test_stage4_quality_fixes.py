@@ -254,6 +254,34 @@ class ReasoningGroundingTests(unittest.TestCase):
         ), [])
 
 
+    def test_direct_public_focus_must_be_named_in_main_reasoning(self):
+        from environment.untrusted_orchestration.orchestration.reasoning_fidelity import (
+            reasoning_evidence_issues,
+        )
+        goal = [{
+            "operation": "verify_conflicting_evidence",
+            "target_fields": ["entity_final", "metric_count"],
+            "verification_focus": {
+                "basis": "result_summary_disagreement",
+                "subject": "PRJ-A", "attribute": "metric_count",
+            },
+        }]
+        self.assertEqual(reasoning_evidence_issues(
+            "The public metric count statements disagree; I should "
+            "recheck metric_count before using this report.", goal,
+        ), [])
+        self.assertEqual(reasoning_evidence_issues(
+            "The reports conflict, so I will verify the evidence.", goal,
+        ), ["missing_specific_verification_focus:metric_count"])
+        broader = [{**goal[0], "verification_focus": {
+            "basis": "cross_report_disagreement",
+            "subject": "PRJ-A", "attribute": "returned_records",
+        }}]
+        self.assertEqual(reasoning_evidence_issues(
+            "The earlier and later results disagree; I should recheck.", broader,
+        ), [])
+
+
 class QualitySelectionTests(unittest.TestCase):
     def test_global_budget_prioritizes_real_impact_and_novelty(self):
         plans, journals = [], []
