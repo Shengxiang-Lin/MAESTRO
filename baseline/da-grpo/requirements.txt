@@ -11,3 +11,4 @@ PyYAML
 requests
 bitsandbytes
 accelerate
+tqdm>=4.65
