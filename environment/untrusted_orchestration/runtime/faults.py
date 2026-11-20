@@ -389,7 +389,7 @@ def run_attempt(
         for parent in parents for row in parent.rows for ref in row["support"]
     }
     def trace(steps, work_products):
-        from ..reporting.public_work import observed_work_checks
+        from ..reporting.work_evidence import observed_work_checks
         visible = []
         for step, product in steps:
             observed = _observed_step(
