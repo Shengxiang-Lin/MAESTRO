@@ -1,5 +1,6 @@
 # MAESTRO standalone Stage2 GRPO: Unsloth + TRL + dedicated vLLM server
-# Default: GPU 0 rollout + GPU 1 trainer (two-GPU pilot). For four cards, set train_gpus: 3.
+# Two-GPU RTX 6000D deployment: GPU 1 rollout + GPU 0 trainer.
+# GPU 0 currently fails vLLM initialization; training on it must still pass a pilot.
 version: 2
 
 paths:
@@ -49,8 +50,8 @@ rollout:
 distributed:
   vllm_mode: server
   train_gpus: 1
-  rollout_gpu: 0
-  train_gpu_start: 1
+  rollout_gpu: 1
+  train_gpu_start: 0
   server_host: 127.0.0.1
   server_port: 8000
 
