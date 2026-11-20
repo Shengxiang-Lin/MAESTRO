@@ -1,7 +1,7 @@
 """Stage 2 native DA-style GRPO backend: no Stage-1 Risk Head or RiskKV.
 
-This is a Stage-2-owned entrypoint. For the first stable GRPO baseline, use
-the already tested DA implementation as a library without modifying it:
+This is an independent Stage-2-owned implementation of the validated DA
+training mechanics. No baseline/da-grpo source is imported:
 - Unsloth FastLanguageModel BF16 LoRA + colocated vLLM
 - Qwen3 Chat Template and TRL GRPOTrainer, DAPO + 0.01 KL
 - Global Evidence & Recovery LLM Judge (default): graph+visible facts+recovery
@@ -11,33 +11,17 @@ Private decision states are loaded by the reward only, never by the policy.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 from pathlib import Path
-import sys
 
 
-ROOT = Path(__file__).resolve().parents[2]
-BASELINE = ROOT / "baseline" / "da-grpo"
-DEFAULT_CONFIG = BASELINE / "config.yaml"
+from train_maestro_8b.policy import grpo_runtime as runtime
+
+DEFAULT_CONFIG = runtime.DEFAULT_CONFIG
 
 
-def get_da_baseline():
-    """Load the reference implementation by file path, not as a new fork."""
-    if str(BASELINE) not in sys.path:
-        sys.path.insert(0, str(BASELINE))
-    spec = importlib.util.spec_from_file_location(
-        "maestro_stage2_da_reference", BASELINE / "train.py",
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Unable to import DA-GRPO reference trainer")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def build_stage2_config(args, baseline):
-    cfg = baseline.load_config(args.config)
+def build_stage2_config(args):
+    cfg = runtime.load_config(args.config)
     cfg["paths"]["model"] = Path(args.model).expanduser().resolve()
     cfg["paths"]["train_parquet"] = Path(args.train_file).expanduser().resolve()
     cfg["paths"]["output_dir"] = Path(args.output_dir).expanduser().resolve()
@@ -94,13 +78,13 @@ def build_stage2_config(args, baseline):
     return cfg
 
 
-def train_stage2(cfg: dict, baseline, *, resume: str | None, args):
+def train_stage2(cfg: dict, *, resume: str | None, args):
     """Native Stage2 GRPO. Keep DA's trainer mechanics; replace only reward.
 
     Constructs and trains the policy here. The original DA reward is an
     explicit ablation; hybrid uses private Environment + semantic Judge.
     """
-    baseline.configure_runtime(cfg)
+    runtime.configure_runtime(cfg)
     print("[MAESTRO/Stage2] native DA GRPO; no Stage1 Risk Head/KV steering", flush=True)
     import torch
     if torch.cuda.device_count() != 1 or not torch.cuda.is_bf16_supported():
@@ -108,12 +92,12 @@ def train_stage2(cfg: dict, baseline, *, resume: str | None, args):
 
     # Unsloth MUST patch before importing TRL GRPOTrainer.
     from unsloth import FastLanguageModel
-    baseline.disable_vllm_flashinfer_autotune()
+    runtime.disable_vllm_flashinfer_autotune()
     from trl import GRPOConfig, GRPOTrainer
     from datasets import Dataset
-    from reward_adapter import make_reward_function as make_da_reference_reward
+    from train_maestro_8b.policy.da_reward_adapter import make_reward_function as make_da_reference_reward
 
-    rows = baseline.load_dataset_rows(cfg["paths"]["train_parquet"])
+    rows = runtime.load_dataset_rows(cfg["paths"]["train_parquet"])
     private_states = None
     if args.reward_mode != "da":
         from train_maestro_8b.policy.trl_reward_adapter import (
@@ -164,7 +148,7 @@ def train_stage2(cfg: dict, baseline, *, resume: str | None, args):
             global_contexts=global_contexts,
         )
     print(f"[MAESTRO/Stage2] {len(rows)} Stage4 Main decisions; "
-          f"batch_plan={baseline.batch_plan(cfg)}", flush=True)
+          f"batch_plan={runtime.batch_plan(cfg)}", flush=True)
     model_cfg, rollout = cfg["model"], cfg["rollout"]
     policy, tokenizer = FastLanguageModel.from_pretrained(
         model_name=str(cfg["paths"]["model"]),
@@ -181,7 +165,7 @@ def train_stage2(cfg: dict, baseline, *, resume: str | None, args):
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     # DA uses Qwen3 role/chat templates, not raw continuation+newline.
-    baseline.check_prompt_lengths(rows, tokenizer, rollout["max_prompt_tokens"])
+    runtime.check_prompt_lengths(rows, tokenizer, rollout["max_prompt_tokens"])
     policy = FastLanguageModel.get_peft_model(
         policy, r=model_cfg["lora_rank"], lora_alpha=model_cfg["lora_alpha"],
         lora_dropout=model_cfg["lora_dropout"],
@@ -200,7 +184,7 @@ def train_stage2(cfg: dict, baseline, *, resume: str | None, args):
         )
         print("[MAESTRO/Stage2] Stage1 belief warm-start: " +
               json.dumps(stage1_warmstart, ensure_ascii=False), flush=True)
-    training_config = GRPOConfig(**baseline.build_grpo_kwargs(cfg))
+    training_config = GRPOConfig(**runtime.build_grpo_kwargs(cfg))
     trainer = GRPOTrainer(
         model=policy,
         processing_class=tokenizer,
@@ -248,12 +232,12 @@ def make_global_judge_instance(args, cfg):
     )
 
 
-def verify_private_reward_data(args, cfg, baseline):
+def verify_private_reward_data(args, cfg):
     from train_maestro_8b.policy.trl_reward_adapter import (
         load_private_states, select_scorable_rows,
     )
     states = load_private_states(args.decision_states)
-    rows = baseline.load_dataset_rows(cfg["paths"]["train_parquet"])
+    rows = runtime.load_dataset_rows(cfg["paths"]["train_parquet"])
     rows, summary = select_scorable_rows(rows, states)
     print("[MAESTRO/Stage2] private reward alignment: " +
           json.dumps(summary, ensure_ascii=False), flush=True)
@@ -268,31 +252,30 @@ def verify_private_reward_data(args, cfg, baseline):
 
 
 def run(args):
-    baseline = get_da_baseline()
-    cfg = build_stage2_config(args, baseline)
+    cfg = build_stage2_config(args)
     if args.max_train_rows < 0 or not 0 <= args.judge_weight <= 1:
         raise ValueError("Invalid pilot size / semantic Judge weight")
     if args.judge_timeout <= 0 or args.judge_retries < 0:
         raise ValueError("Invalid semantic Judge timeout/retries")
     if args.dry_run:
-        baseline.show_config(cfg)
+        runtime.show_config(cfg)
         print("[MAESTRO/Stage2] reward_mode=" + args.reward_mode +
               " decision_states=" + str(args.decision_states))
         return
-    checks = baseline.environment_checks(cfg)
+    checks = runtime.environment_checks(cfg)
     if args.check:
-        baseline.show_config(cfg)
+        runtime.show_config(cfg)
         if not all(checks.values()):
             raise RuntimeError("Stage2 missing requirements: " + str(checks))
         if args.reward_mode != "da":
-            verify_private_reward_data(args, cfg, baseline)
+            verify_private_reward_data(args, cfg)
         return
     if not args.test_judge and not all(checks.values()):
         raise RuntimeError("Stage2 preflight failed: " + str(checks))
     if args.reward_mode == "da":
-        key = baseline.judge_key(cfg["judge"]["api_key_env"])
-        baseline.setup_judge(cfg, key)
-        baseline.probe_judge(cfg, key)
+        key = runtime.judge_key(cfg["judge"]["api_key_env"])
+        runtime.setup_judge(cfg, key)
+        runtime.probe_judge(cfg, key)
     elif args.reward_mode in ("global", "hybrid", "judge_only"):
         judge = (make_global_judge_instance(args, cfg)
                  if args.reward_mode == "global" else make_semantic_judge(args, cfg))
@@ -326,7 +309,7 @@ def run(args):
     print("[MAESTRO/Stage2] backend=Unsloth+TRL/vLLM; risk_head=off; "
           f"reward={args.reward_mode}; formatter=Qwen3_chat_template", flush=True)
     train_stage2(
-        cfg, baseline, resume=args.resume_from_checkpoint, args=args,
+        cfg, resume=args.resume_from_checkpoint, args=args,
     )
     destination = cfg["paths"]["output_dir"] / "stage2_da_training.json"
     destination.write_text(json.dumps({

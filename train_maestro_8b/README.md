@@ -1,3 +1,26 @@
+## Standalone Stage2 GRPO training (no DA baseline dependency)
+
+The default `STAGE2_TRAINER=da` path is implemented inside
+`train_maestro_8b/policy/`: `da_backend.py` owns model loading and
+`GRPOTrainer`, `grpo_runtime.py` owns config/rollout/dataset helpers,
+`grpo_config.yaml` is its standalone profile, and
+`da_reward_adapter.py` / `da_reward_fn.py` preserve the legacy O1
+four-dimensional Judge for `DA_REWARD_MODE=da`. The default
+`DA_REWARD_MODE=global` still uses the independent Global Judge and
+its pre-action evidence snapshots. This training route never imports or
+reads `baseline/da-grpo/`.
+
+CPU contract checks:
+`python -m unittest train_maestro_8b.tests.test_stage2_da train_maestro_8b.tests.test_grpo_independence`.
+
+First real training test (on the single-BF16-GPU host):
+`prepare-grpo` -> `preflight` -> `judge` -> `pilot` via
+`bash train_maestro_8b/run/pipeline.sh <command>`.
+Do not start the full `grpo` run until the pilot has nonzero
+within-group reward variance and a nonzero optimizer gradient.
+
+---
+
 ## Current default Stage2 reward: Global Evidence & Recovery LLM Judge
 
 Set `DA_REWARD_MODE=global` (the default). The student generates the
@@ -85,7 +108,7 @@ bash train_maestro_8b/run/pipeline.sh pilot
 GRPO_MAX_STEPS=100 bash train_maestro_8b/run/pipeline.sh grpo
 ```
 
-The default is `STAGE2_TRAINER=da DA_REWARD_MODE=hybrid`. Experiment
+The current default is `STAGE2_TRAINER=da DA_REWARD_MODE=global`. Experiment
 output paths automatically use `stage2-hybrid-pilot/` and
 `stage2-hybrid-grpo/` to avoid overwriting the earlier DA-judge run.
 Inspect `reward_diagnostics.jsonl` for local validity/failure reason,
@@ -126,7 +149,7 @@ required for this run.** The original baseline source remains unchanged.
 The Stage2 backend **constructs and runs** BF16 LoRA + Unsloth/vLLM
 with TRL GRPOTrainer and DAPO+KL 0.01 inside
 `train_maestro_8b/policy/da_backend.py`.
-It reuses the DA baseline configuration/tokenization helpers;
+It uses independently maintained GRPO configuration and tokenization helpers;
 the old four-dimension Judge is now available only via
 `DA_REWARD_MODE=da` for a controlled ablation.
 It sends public task/history plus the private gold/expert reference to

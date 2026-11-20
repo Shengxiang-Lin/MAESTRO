@@ -230,7 +230,7 @@ def make_stage2_reward_function(*, private_states: dict[str, dict],
         trainer_state: Any = None,
         **_: Any,
     ) -> list[float]:
-        from reward_adapter import completion_text
+        from train_maestro_8b.policy.da_reward_adapter import completion_text
         n = len(completions)
         if not (n and n % num_generations == 0 and
                 len(data_source) == len(ground_truth) == len(extra_info_json) == n):
