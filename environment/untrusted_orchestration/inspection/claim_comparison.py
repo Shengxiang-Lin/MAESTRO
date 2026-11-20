@@ -22,6 +22,16 @@ _ENTITY = re.compile(
     r"ENT-[A-Za-z0-9]+|Record\s+\d+)", re.I,
 )
 _DECODER = json.JSONDecoder()
+_ID_VALUE = re.compile(
+    r"(?:Case-\d+|Entry-\d+|Dossier-[A-Za-z0-9]+|PRJ-[A-Za-z0-9]+|"
+    r"ENT-[A-Za-z0-9]+|MK-[A-Za-z0-9]+|RK-[A-Za-z0-9]+|"
+    r"KEY[12]-[A-Za-z0-9]+)", re.I,
+)
+
+
+def _display(value) -> str:
+    return value.casefold() if isinstance(value, str) else str(value)
+
 
 
 def _same(a, b) -> bool:
@@ -82,7 +92,14 @@ def _explicit_values(summary: str, field: str):
         try:
             value, end = _DECODER.raw_decode(fragment)
         except (ValueError, TypeError):
-            continue
+            identity = _ID_VALUE.match(fragment)
+            boolean = re.match(r"(?:true|false)\b", fragment, re.I)
+            if identity:
+                value, end = identity.group(), identity.end()
+            elif boolean:
+                value, end = boolean.group().casefold() == "true", boolean.end()
+            else:
+                continue
         if type(value) not in (str, int, float, bool):
             continue
         suffix = fragment[end:]
@@ -137,8 +154,8 @@ def report_claim_conflicts(
                     (selected[0]["values"][name] for name in _SUBJECT_FIELDS
                      if name in selected[0]["values"]), "single_record"))
                     if len(selected) == 1 else "unknown"),
-                "result_value": ", ".join(str(x) for x in values[:8]),
-                "summary_value": str(claimed),
+                "result_value": ", ".join(_display(x) for x in values[:8]),
+                "summary_value": _display(claimed),
                 "source_fact_refs": sorted({
                     ref for row in selected
                     for ref in row.get("source_fact_refs", [])
