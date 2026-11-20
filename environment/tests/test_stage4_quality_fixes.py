@@ -122,7 +122,7 @@ class PublicVerificationFocusTests(unittest.TestCase):
             "source_ids": ["src"],
             "outputs": {"typed_relation": ["entity_final", "metric_count"]},
         }}
-        state.current = {"M1": SimpleNamespace(version=1, status="done", runtime={})}
+        state.current = {"M1": SimpleNamespace(version=1, status="done", runtime={}, product=object())}
         state.public_reports = {"M1": report(
             [{"entity_final": "PRJ-A", "metric_count": 20}],
             "The summary records metric count = " + ("21" if disputed else "20") + ".",
