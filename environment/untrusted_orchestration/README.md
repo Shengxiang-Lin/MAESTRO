@@ -293,6 +293,23 @@ an online trained Main-Agent policy result. For language-based SFT,
 and fallback remain private diagnostics; they cannot be promoted
 through a successful deterministic outcome.
 
+## Public claim-focused verification (Stage 4A / 4C)
+
+A pending `verify_conflicting_evidence` request may carry an optional
+`verification_focus: {basis, subject, attribute}` derived **only** from
+delivered Result/Summary disagreements or still-active cross-report conflict
+events. This is a description of which *reported claim is disputed*, not a
+prediction of which source is correct. A vague or unparseable report retains
+the previous broad verification instruction with no fabricated focus.
+
+`target_fields` and `execution_binding.macro_task_id` remain unchanged:
+the actual Sub-Agent still executes the full authorized Macro operator chain.
+Stage 4C rebuilds the locked assignment against final delivered reports and
+rejects a Result/Summary focus that no longer has a visible typed witness.
+This does not implement operator slicing, alter the Stage 1–3 reference, or
+change the O1 output schema. For a new-language pilot, use a fresh output
+directory instead of resuming journals authored before this contract change.
+
 ## Causal-history and language-quality gates
 
 Stage 4A now rebuilds historical Main assignment prose **after the actual
