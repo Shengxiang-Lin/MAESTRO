@@ -98,11 +98,14 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--role", choices=("serve", "train"), required=True)
     p.add_argument("--config", type=Path, default=runtime.DEFAULT_CONFIG)
+    p.add_argument("--model", type=Path, default=None, help="Optional model path shared by server/trainer")
     p.add_argument("--dry-run", action="store_true")
     args, extra = p.parse_known_args(argv)
     if extra and extra[0] == "--":
         extra.pop(0)
     cfg = runtime.load_config(args.config)
+    if args.model is not None:
+        cfg["paths"]["model"] = runtime.repo_path(args.model)
     devices, env = topology(cfg, args.role)
     cmd = command(cfg, args.role, extra)
     info = {
