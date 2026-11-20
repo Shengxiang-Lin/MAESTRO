@@ -20,6 +20,7 @@ from environment.base_orchestration.o1_compat import o1_prompt_from_turn
 from environment.base_orchestration.trajectory_builder import _answer_text
 from .source_io import digest, read_jsonl, settings_for
 from .audit import audit_dataset, audit_output
+from .private_context import publish_private_context
 
 CASE_SCHEMA = "maestro.paired_case.v1"
 DECISION_SCHEMA = "maestro.main_decision.v1"
@@ -456,7 +457,16 @@ def export_dataset(
             "split/filter/Parquet/reward transformations."
         ),
     }
+    # Freeze evaluator-only Scene/World and time-indexed claim observations.
+    # Baseline-independent; never store these objects in policy decisions.
+    publish_private_context(
+        output_dir, scenes=scenes, decisions=decisions,
+        claim_path=stage4_dir / "private/claim_state_supervision.jsonl",
+        manifest=result,
+    )
     _write_json(output_dir / "manifest.json", result)
+    # Verify persisted private context together with immutable base files.
+    audit_output(output_dir, verify_manifest=True, progress=False)
     return result
 
 
