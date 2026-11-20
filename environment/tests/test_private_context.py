@@ -8,7 +8,8 @@ import unittest
 
 from environment.data_export.audit import audit_output
 from environment.data_export.private_context import (
-    attach_to_unified, collect_private_context, verify_private_context,
+    attach_to_unified, collect_private_context, discover_context_sources,
+    verify_private_context,
 )
 from environment.data_export.source_io import digest
 from environment.tests.test_data_audit import example
@@ -107,6 +108,36 @@ class FrozenGlobalContextTests(unittest.TestCase):
                 stream.write('{"tampered":true}\n')
             with self.assertRaisesRegex(ValueError, "checksum_changed"):
                 audit_output(base, verify_manifest=True)
+
+    def test_autodiscover_matching_originals_and_ignore_stale_default_paths(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base, scenes, stage4 = self.sample_sources(root)
+            (root / "stale/stage1").mkdir(parents=True)
+            (root / "stale/stage1/scenes.jsonl").write_text(
+                '{"task_id":"wrong"}\n', encoding="utf-8",
+            )
+            (root / "stale/stage4").mkdir(parents=True)
+            (root / "stale/stage4/manifest.json").write_text(
+                '{"different_run":true}\n', encoding="utf-8",
+            )
+            found_scenes, found_stage4 = discover_context_sources(base, root)
+            self.assertEqual(found_scenes, scenes)
+            self.assertEqual(found_stage4, stage4)
+            attach_to_unified(
+                unified_dir=base,
+                scenes_path=found_scenes,
+                stage4_dir=found_stage4,
+            )
+            self.assertEqual(verify_private_context(base)["missing_claim_snapshots"], 0)
+
+    def test_autodiscovery_does_not_guess_missing_originals(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base, scenes, stage4 = self.sample_sources(root)
+            scenes.unlink()
+            with self.assertRaisesRegex(FileNotFoundError, "original_stage1_scenes_not_found"):
+                discover_context_sources(base, root)
 
     def test_mismatched_source_is_rejected_without_modifying_manifest(self):
         with TemporaryDirectory() as tmp:
