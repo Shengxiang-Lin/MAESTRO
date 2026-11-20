@@ -306,13 +306,11 @@ prepare_grpo() {
       --output-dir "$DA_DATA" \
       --reward-mode "$DA_REWARD_MODE" \
       --seed "$DA_SPLIT_SEED" \
-      --scenes-file "$STAGE1_DIR/questions/scenes.jsonl" \
-      --stage4-manifest "$STAGE4_DIR/manifest.json" \
-      --claim-states "$STAGE4_DIR/private/claim_state_supervision.jsonl" \
       --tokenizer "$MODEL" \
       --max-prompt-tokens "$GRPO_MAX_PROMPT_TOKENS" \
       "${extra[@]}"
     need "$DA_DATA/train.parquet"
+    [[ "$DA_REWARD_MODE" == "global" ]] && { need "$DA_DATA/private/scenes.jsonl"; need "$DA_DATA/private/claim_state_supervision.jsonl"; }
     need "$DA_DATA/val.parquet"
     need "$DA_DATA/test.parquet"
     return
@@ -364,8 +362,8 @@ init_stage2_da_args() {
     --judge_workers "$GRPO_JUDGE_WORKERS"
     --reward_mode "$DA_REWARD_MODE"
     --decision_states "$DA_DATA/private/decision_reward_states.jsonl"
-    --scenes_file "$STAGE1_DIR/questions/scenes.jsonl"
-    --claim_states "$STAGE4_DIR/private/claim_state_supervision.jsonl"
+    --scenes_file "$DA_DATA/private/scenes.jsonl"
+    --claim_states "$DA_DATA/private/claim_state_supervision.jsonl"
     --judge_weight "$GRPO_JUDGE_WEIGHT"
     --judge_timeout "$GRPO_JUDGE_TIMEOUT"
     --judge_retries "$GRPO_JUDGE_RETRIES"
@@ -503,9 +501,6 @@ inspect_io() {
       --source-dir "$DA_UNIFIED_DIR" \
       --output-dir "$DA_DATA" \
       --reward-mode "$DA_REWARD_MODE" \
-      --scenes-file "$STAGE1_DIR/questions/scenes.jsonl" \
-      --stage4-manifest "$STAGE4_DIR/manifest.json" \
-      --claim-states "$STAGE4_DIR/private/claim_state_supervision.jsonl" \
       --tokenizer "$MODEL" --max-prompt-tokens "$GRPO_MAX_PROMPT_TOKENS" --dry-run
     return
   fi
