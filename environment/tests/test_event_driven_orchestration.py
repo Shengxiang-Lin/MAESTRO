@@ -25,8 +25,9 @@ from environment.untrusted_orchestration.state_machine import (
 )
 from environment.untrusted_orchestration.trajectory_builder import build_branch
 from environment.untrusted_orchestration.generate_turns import (
-    generate_turns, _plan_branches, _publish,
+    generate_turns, _plan_branches,
 )
+from environment.untrusted_orchestration.publication import _publish
 from environment.untrusted_orchestration.inspection.publication_guard import (
     review_turn_surface,
 )

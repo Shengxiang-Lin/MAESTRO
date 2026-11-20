@@ -943,7 +943,7 @@ class RoundLocalRecoveryTests(unittest.TestCase):
 
 
     def test_failed_reviewed_episodes_remain_private_not_public(self):
-        from environment.untrusted_orchestration.generate_turns import _publish
+        from environment.untrusted_orchestration.publication import _publish
 
         with TemporaryDirectory() as td:
             root = Path(td)
