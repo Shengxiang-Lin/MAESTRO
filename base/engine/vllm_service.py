@@ -58,6 +58,15 @@ class VLLMServiceManager:
             raise FileNotFoundError(f"vLLM model path does not exist: {model_path}")
 
         served_name = str(cfg.get("served_model_name") or cfg.get("model") or name)
+        adapter_path = self._validate_lora_adapter(name, cfg, model_path)
+        if adapter_path:
+            # vLLM --served-model-name names the BASE, while chat requests
+            # target the LoRA name registered through --lora-modules.
+            cfg["lora_adapter_path"] = adapter_path
+            base_served = str(cfg.get("lora_base_served_name") or
+                              served_name + "-base")
+            if base_served == served_name:
+                raise ValueError("lora_base_served_name must differ from adapter model name")
         host = str(cfg.get("host") or "127.0.0.1")
         port = int(cfg.get("port") or 8000)
         base_url = str(cfg.get("base_url") or f"http://{host}:{port}/v1").rstrip("/")
@@ -65,7 +74,8 @@ class VLLMServiceManager:
         auto_start = bool(cfg.get("auto_start", True))
         reuse_existing = bool(cfg.get("reuse_existing", True))
 
-        if self._server_matches(base_url, served_name, api_key):
+        if self._server_matches(base_url, served_name, api_key,
+                                expected_lora_root=adapter_path):
             logger.info(f"[vLLM] Reusing {name} at {base_url}")
             return self._runtime_config(
                 name=name,
@@ -131,7 +141,8 @@ class VLLMServiceManager:
                     f"vLLM service {name!r} exited with code {process.returncode}. "
                     f"See {log_path}. Tail:\n{self._tail(log_path)}"
                 )
-            if self._server_matches(base_url, served_name, api_key):
+            if self._server_matches(base_url, served_name, api_key,
+                                    expected_lora_root=adapter_path):
                 return self._runtime_config(
                     name=name,
                     config=cfg,
@@ -164,6 +175,56 @@ class VLLMServiceManager:
             return ""
         return os.path.expanduser(os.path.expandvars(str(value)))
 
+    @classmethod
+    def _validate_lora_adapter(
+        cls, name: str, cfg: Dict[str, Any], base_model_path: str,
+    ) -> str | None:
+        """Fail fast if a configured PEFT adapter is missing or incompatible."""
+        raw = cfg.get("lora_adapter_path")
+        if raw is None:
+            return None
+        path = cls._expand_model_path(raw)
+        if not path or "$" in path:
+            raise ValueError(
+                f"vLLM model {name!r}: unresolved lora_adapter_path={path!r}; "
+                "set the adapter environment variable"
+            )
+        adapter = Path(path).resolve()
+        if not adapter.is_dir():
+            raise FileNotFoundError(
+                f"vLLM model {name!r}: missing trained LoRA adapter: {adapter}"
+            )
+        config_path = adapter / "adapter_config.json"
+        if not config_path.is_file() or not any(
+            (adapter / filename).is_file()
+            for filename in ("adapter_model.safetensors", "adapter_model.bin")
+        ):
+            raise FileNotFoundError(
+                f"vLLM model {name!r}: {adapter} is not a saved PEFT LoRA "
+                "(need adapter_config.json and adapter_model weights)"
+            )
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        rank = data.get("r")
+        maximum = cfg.get("max_lora_rank")
+        if type(rank) is not int or rank <= 0:
+            raise ValueError(f"vLLM model {name!r}: invalid PEFT LoRA rank")
+        if type(maximum) is not int or maximum < rank:
+            raise ValueError(
+                f"vLLM model {name!r}: adapter rank={rank} exceeds "
+                f"max_lora_rank={maximum!r}; set the vLLM LoRA rank explicitly"
+            )
+        recorded_base = data.get("base_model_name_or_path")
+        if recorded_base and Path(str(recorded_base)).is_absolute():
+            expected = Path(str(recorded_base))
+            actual = Path(base_model_path)
+            if actual.is_absolute() and expected.exists() and actual.exists():
+                if expected.resolve() != actual.resolve():
+                    raise ValueError(
+                        f"vLLM model {name!r}: adapter was trained for "
+                        f"{expected}, requested base is {actual}"
+                    )
+        return str(adapter)
+
     @staticmethod
     def _tensor_parallel_size(config: Dict[str, Any]) -> int:
         explicit = config.get("tensor_parallel_size")
@@ -195,7 +256,8 @@ class VLLMServiceManager:
             "--model",
             model_path,
             "--served-model-name",
-            served_name,
+            str(config.get("lora_base_served_name") or served_name + "-base")
+            if config.get("lora_adapter_path") else served_name,
             "--host",
             host,
             "--port",
@@ -222,6 +284,14 @@ class VLLMServiceManager:
             value = normalized.get(key)
             if value is not None:
                 command.extend([flag, str(value)])
+
+        if config.get("lora_adapter_path"):
+            command.extend([
+                "--enable-lora",
+                "--max-lora-rank", str(config["max_lora_rank"]),
+                "--lora-modules",
+                f"{served_name}={config['lora_adapter_path']}",
+            ])
 
         bool_flags = {
             "enforce_eager": "--enforce-eager",
@@ -314,6 +384,8 @@ class VLLMServiceManager:
             "model_path": model_path,
             "served_model_name": served_name,
             "base_url": base_url,
+            "lora_adapter_path": config.get("lora_adapter_path"),
+            "lora_rank": config.get("max_lora_rank"),
             "gpus": config.get("gpus"),
             "tensor_parallel_size": self._tensor_parallel_size(config),
             "pid": pid,
@@ -330,7 +402,10 @@ class VLLMServiceManager:
             return False
 
     @staticmethod
-    def _server_matches(base_url: str, served_name: str, api_key: str) -> bool:
+    def _server_matches(
+        base_url: str, served_name: str, api_key: str,
+        *, expected_lora_root: str | None = None,
+    ) -> bool:
         headers = {}
         if api_key and api_key != "EMPTY":
             headers["Authorization"] = f"Bearer {api_key}"
@@ -342,12 +417,18 @@ class VLLMServiceManager:
                 if response.status != 200:
                     return False
                 payload = json.loads(response.read().decode("utf-8"))
-            ids = {
-                str(item.get("id"))
-                for item in payload.get("data", [])
-                if isinstance(item, dict) and item.get("id")
-            }
-            return served_name in ids
+            for item in payload.get("data", []):
+                if not isinstance(item, dict) or item.get("id") != served_name:
+                    continue
+                if expected_lora_root is None:
+                    return True
+                # Avoid silently reusing a same-named adapter from a different
+                # experiment. vLLM exposes its LoRA path as model-card root.
+                root = item.get("root")
+                if not isinstance(root, str):
+                    return False
+                return Path(root).resolve() == Path(expected_lora_root).resolve()
+            return False
         except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError):
             return False
 

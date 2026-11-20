@@ -1,0 +1,41 @@
+# Frozen OmniGAIA pretest / Orchestra-o1.
+# Orchestra-o1 Main Agent: Qwen3-8B Base + DA-GRPO LoRA (thinking enabled).
+# Deployment details are defined in config/model_config.yaml.
+# Before running:
+#   export QWEN3_8B_MODEL_PATH=/path/to/Qwen3-8B
+# LoRA adapter path: QWEN3_8B_DA_GRPO_ADAPTER_PATH
+# Defaults/port/GPU/enable_thinking: config/model_config.yaml
+main_model: "qwen3-8b-da-grpo-lora"
+sub_models:
+  - "qwen3.8-max"
+
+search:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+
+browse:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+
+tool_models:
+  image_analysis: "qwen3.7-flash"
+  audio_analysis: "qwen3.5-omni-flash"
+  video_vision: "qwen3.7-flash"
+  video_audio: "qwen3.5-omni-flash"
+  video_summary: "qwen3.7-flash"
+
+evaluation_model: "qwen3.7-plus"
+
+dataset_type: "OmniGAIA"
+dataset_path: "data/OmniGAIA/test_metadata.jsonl"
+attachments_dir: "data/OmniGAIA"
+level_filter: null
+# Fixed OmniGAIA pre-experiment (60 questions).
+task_ids_file: "data/OmniGAIA/splits/pretest_60_ids.txt"
+
+max_tasks: null
+max_attempts: 10
+max_concurrency: 1
+
+result_folder: "logs/omnigaia_pretest/orchestra_o1_da_grpo_lora"
+trajectory_folder: "logs/omnigaia_pretest/orchestra_o1_da_grpo_lora/trajectories"

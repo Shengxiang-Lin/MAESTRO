@@ -81,6 +81,7 @@ class LLMConfig:
         self.top_p = config.get("top_p", 1)
         self.enable_thinking = config.get("enable_thinking", None)
         self.extra_body = config.get("extra_body", None)
+        self.max_completion_tokens = config.get("max_completion_tokens", None)
         self.backend = str(config.get("backend") or "api").lower()
 
 
@@ -203,6 +204,7 @@ class LLMsConfig:
             "top_p": config.get("top_p", 1),
             "enable_thinking": config.get("enable_thinking", None),
             "extra_body": config.get("extra_body", None),
+            "max_completion_tokens": config.get("max_completion_tokens", None),
             "backend": backend,
         }
         return LLMConfig(llm_config)
@@ -338,7 +340,10 @@ class AsyncLLM:
                 and not str(self.config.model).startswith("local-")
             ),
         )
-        self.max_completion_tokens = max_completion_tokens
+        self.max_completion_tokens = (
+            max_completion_tokens if max_completion_tokens is not None
+            else getattr(self.config, "max_completion_tokens", None)
+        )
         
     async def __call__(self, prompt, max_tokens=None, temperature=None, seed=None):
         return await llm_retry(
@@ -419,7 +424,17 @@ class AsyncLLM:
             is_api=self.config.backend != "vllm", raw_usage=usage_record["raw_usage"],
             notes=usage_record["notes"], request_id=getattr(response, "id", None),
         )
-        ret = response.choices[0].message.content
+        message = response.choices[0].message
+        # Qwen3 with reasoning_parser=qwen3 exposes <think> in the separate
+        # reasoning_content field. The O1 JSON action MUST come from content,
+        # never from reasoning_content (which may contain partial JSON).
+        ret = message.content or ""
+        if self.config.backend == "vllm" and not ret.strip():
+            raise ValueError(
+                f"vLLM model {self.config.model}: no final message content. "
+                "The thinking budget may have exhausted max_completion_tokens; "
+                "inspect the server logs or increase the completion budget."
+            )
         logger.log_to_file(LogLevel.INFO, f"LLM Response: {ret}")
         return ret
     
