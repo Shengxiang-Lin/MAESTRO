@@ -208,6 +208,20 @@ class PairedDatasetEndToEndTests(unittest.TestCase):
                     require_llm=False,
                 )
 
+    def test_stage4_all_template_turns_are_filtered_without_failure(self):
+        from environment.data_export.export import _build_decisions
+        rows = _build_decisions(
+            [("stage4", [{
+                "round_sample_id": "scene-a-fault-one",
+                "round": 2,
+                "generation_mode": "template",
+            }], {"max_attempts": 8, "sub_model": "qwen3-8b",
+                 "model_alias": "model_1"})],
+            scenes={}, splits={}, published_cases=set(), states={},
+            require_llm=True,
+        )
+        self.assertEqual(rows, ([], [], [], []))
+
     def test_invalid_case_clean_fingerprint_is_rejected(self):
         from environment.data_export.export import _case_for_branch
         scene = {"task_id": "q1", "question": "Q"}
