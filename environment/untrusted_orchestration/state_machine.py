@@ -1180,6 +1180,7 @@ class ExecutionState:
                 "basis": "result_summary_disagreement",
                 "subject": claim["subject"],
                 "attribute": claim["field"],
+                "observed_round": self.public_report_rounds.get(task_id),
             }
 
         # An old event is not an active witness after a later recheck. The
