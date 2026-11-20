@@ -75,12 +75,9 @@ def select_rows(decisions: list[dict], *, include_fallback: bool = False,
             skipped[str(mode)] += 1
         else:
             kept.append(decision)
-        if progress and (index + 1) % 128 == 0:
+        if progress and ((index + 1) % 128 == 0 or index + 1 == len(decisions)):
             bar.set_postfix(accepted=len(kept), filtered=sum(skipped.values()),
-                            refresh=False)
-    if progress:
-        bar.set_postfix(accepted=len(kept), filtered=sum(skipped.values()),
-                        refresh=True)
+                            refresh=index + 1 == len(decisions))
     if not kept:
         raise ValueError("no_reviewed_positive_main_decisions")
     return kept, skipped
