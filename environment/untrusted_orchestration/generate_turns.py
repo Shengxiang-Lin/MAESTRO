@@ -1346,7 +1346,7 @@ def generate_turns(
             f"| selected={summary['candidates_selected_for_language_review']} "
             f"| execution recovered={summary['execution_recovered_branches']} "
             f"| incorrect={summary['incorrect']} "
-            f"| reviewed branches={summary['reviewed_branches']} "
+            f"| reviewed branches={summary['recovered']} "
             f"| reviewed turns={summary['main_training_turns']}"
         )
     return summary
