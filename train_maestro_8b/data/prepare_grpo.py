@@ -19,6 +19,9 @@ from tqdm.auto import tqdm
 from environment.data_export.audit import audit_output
 from environment.data_export.source_io import digest, read_jsonl
 from environment.data_export.splits import load_splits, make_splits
+from environment.data_export.private_context import (
+    PRIVATE_FILES, verify_private_context,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SOURCE = ROOT / "environment/data/unified"
@@ -60,22 +63,25 @@ def load_unified(source_dir: Path, *, progress: bool = False):
     return decisions, teachers, scenes, manifest
 
 
-def assert_global_sources(manifest: dict, *, scenes: Path,
-                          stage4_manifest: Path, claim_states: Path) -> None:
-    """The reward-only World/claim inputs must match this frozen base."""
-    expected = manifest.get("source_sha256") or {}
-    for key, path in (
-        ("scenes", absolute(scenes)),
-        ("stage4_manifest", absolute(stage4_manifest)),
-    ):
-        if not path.is_file():
-            raise FileNotFoundError("Global Judge source missing: " + str(path))
-        if expected.get(key) != digest(path):
-            raise ValueError(
-                f"Global Judge {key} does not match canonical Environment data"
-            )
-    if not absolute(claim_states).is_file():
-        raise FileNotFoundError("Global Judge claim snapshots missing: " + str(claim_states))
+def validate_selected_claims(root: Path, rows: dict[str, list[dict]]) -> None:
+    """Selected Global Judge decisions need an exact t-1 claim snapshot."""
+    available = {
+        (item["round_sample_id"], item["main_can_act_from_round"])
+        for item in read_jsonl(root / PRIVATE_FILES[1])
+    }
+    selected = {
+        (row["extra_info"]["case_id"], row["extra_info"]["step_index"])
+        for subset in rows.values() for row in subset
+        if row["data_source"] == "maestro_stage4"
+        and row["extra_info"]["step_index"] > 1
+    }
+    missing = selected - available
+    if missing:
+        raise ValueError(
+            f"unified_selected_global_decisions_missing_claims:{len(missing)}; "
+            f"examples={sorted(missing)[:3]}. Re-export or attach original "
+            "Stage4 claim snapshots to the unified dataset."
+        )
 
 
 def sample_id(decision: dict) -> str:
@@ -247,9 +253,6 @@ def prepare(*, source_dir: Path = DEFAULT_SOURCE,
             split_map: Path | None = None,
             include_fallback: bool = False, strict_conflicts: bool = False,
             tokenizer: str | None = None, max_prompt_tokens: int = 12288,
-            scenes_file: Path = ROOT / "environment/data/stage1/questions/scenes.jsonl",
-            stage4_manifest: Path = ROOT / "environment/data/stage4/manifest.json",
-            claim_states: Path = ROOT / "environment/data/stage4/private/claim_state_supervision.jsonl",
             dry_run: bool = False, overwrite: bool = False,
             reuse_if_unchanged: bool = False, progress: bool = False) -> dict:
     source = absolute(source_dir)
@@ -259,11 +262,8 @@ def prepare(*, source_dir: Path = DEFAULT_SOURCE,
     if max_prompt_tokens < 1:
         raise ValueError("max_prompt_tokens must be positive")
     decisions, teachers, scenes, manifest = load_unified(source, progress=progress)
-    if reward_mode == "global":
-        assert_global_sources(
-            manifest, scenes=scenes_file, stage4_manifest=stage4_manifest,
-            claim_states=claim_states,
-        )
+    private_meta = (verify_private_context(source, decisions=decisions,
+                  require_complete=False) if reward_mode == "global" else None)
     ratios = (train_ratio, val_ratio, 1 - train_ratio - val_ratio)
     splits = load_splits(absolute(split_map), scenes) if split_map else make_splits(
         scenes, seed=seed, ratios=ratios,
@@ -273,6 +273,8 @@ def prepare(*, source_dir: Path = DEFAULT_SOURCE,
         reward_mode=reward_mode, include_fallback=include_fallback,
         progress=progress,
     )
+    if reward_mode == "global":
+        validate_selected_claims(source, rows)
     if strict_conflicts and quality["conflicting_prompt_groups"]:
         raise ValueError("Conflicting expert references for identical prompts")
     for split in SPLITS:
@@ -282,6 +284,7 @@ def prepare(*, source_dir: Path = DEFAULT_SOURCE,
         "source_dir": str(source),
         "source_manifest_sha256": digest(source / "manifest.json"),
         "source_file_sha256": manifest["base_file_sha256"],
+        "private_context_file_sha256": private_meta["file_sha256"] if private_meta else None,
         "output_dir": str(output),
         "reward_mode": reward_mode,
         "include_fallback": include_fallback,
@@ -299,7 +302,8 @@ def prepare(*, source_dir: Path = DEFAULT_SOURCE,
     files = [output / (split + ".parquet") for split in SPLITS] + [
         output / "summary.json", output / "splits.json",
         output / "quality_report.json", output / "private/decision_reward_states.jsonl",
-    ]
+    ] + ([output / name for name in PRIVATE_FILES] if reward_mode == "global" else [])
+
     if output.exists() and any(output.iterdir()):
         if reuse_if_unchanged and all(f.is_file() for f in files):
             old = json.loads((output / "summary.json").read_text(encoding="utf-8"))
@@ -328,6 +332,17 @@ def prepare(*, source_dir: Path = DEFAULT_SOURCE,
         pq.write_table(table, path)
         if pq.read_metadata(path).num_rows != len(rows[split]):
             raise RuntimeError("GRPO Parquet row count mismatch: " + split)
+    if reward_mode == "global":
+        # Private evaluator World/claims are copied byte-for-byte from the
+        # frozen unified snapshot, not mutable Stage1/4 generation outputs.
+        for name, expected in private_meta["file_sha256"].items():
+            source_path, destination = source / name, output / name
+            if digest(source_path) != expected:
+                raise ValueError("Unified private evidence changed during preparation: " + name)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_path, destination)
+            if digest(destination) != expected:
+                raise RuntimeError("Private evaluator sidecar copy checksum mismatch: " + name)
     sidecar = output / "private/decision_reward_states.jsonl"
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     sidecar.write_text(
@@ -359,12 +374,6 @@ def main(argv=None):
     p.add_argument("--strict-conflicts", action="store_true")
     p.add_argument("--tokenizer")
     p.add_argument("--max-prompt-tokens", type=int, default=12288)
-    p.add_argument("--scenes-file", type=Path,
-                   default=ROOT / "environment/data/stage1/questions/scenes.jsonl")
-    p.add_argument("--stage4-manifest", type=Path,
-                   default=ROOT / "environment/data/stage4/manifest.json")
-    p.add_argument("--claim-states", type=Path,
-                   default=ROOT / "environment/data/stage4/private/claim_state_supervision.jsonl")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--reuse-if-unchanged", action="store_true")
@@ -377,8 +386,6 @@ def main(argv=None):
         split_map=args.split_map, include_fallback=args.include_fallback,
         strict_conflicts=args.strict_conflicts, tokenizer=args.tokenizer,
         max_prompt_tokens=args.max_prompt_tokens,
-        scenes_file=args.scenes_file, stage4_manifest=args.stage4_manifest,
-        claim_states=args.claim_states,
         dry_run=args.dry_run, overwrite=args.overwrite,
         reuse_if_unchanged=args.reuse_if_unchanged,
         progress=not args.no_progress,
