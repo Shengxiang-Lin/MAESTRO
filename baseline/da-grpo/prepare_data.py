@@ -36,9 +36,10 @@ def convert(decisions: list[dict], teachers: dict[str, dict],
         scene, identity = decision["scene_id"], decision["decision_id"]
         split = splits[scene]
         by_split[split] += 1
-        if progress and (index + 1) % 128 == 0:
+        if progress and ((index + 1) % 128 == 0 or index + 1 == len(decisions)):
             bar.set_postfix(train=by_split["train"], val=by_split["val"],
-                            test=by_split["test"], refresh=False)
+                            test=by_split["test"],
+                            refresh=index + 1 == len(decisions))
         teacher = teachers.get(identity)
         if teacher is None:
             raise ValueError("grpo_teacher_missing:" + identity)
@@ -87,9 +88,6 @@ def convert(decisions: list[dict], teachers: dict[str, dict],
                 ),
             },
         })
-    if progress:
-        bar.set_postfix(train=by_split["train"], val=by_split["val"],
-                        test=by_split["test"], refresh=True)
     return result
 
 
