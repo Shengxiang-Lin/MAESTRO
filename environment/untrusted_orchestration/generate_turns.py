@@ -1111,9 +1111,29 @@ def generate_turns(
                 ]
                 if not failed_positive or remaining_turns <= 0:
                     continue
-                for row in candidates:
+                # A failed answer-changing case must not be backfilled
+                # with a cheap consistency-only case. Preserve the fault
+                # family and meaningful history/causal impact too.
+                from .scenario.candidate_selection import candidate_quality_key
+                failed = min(failed_positive, key=candidate_quality_key)
+                impact_rank = {
+                    "answer_changing": 0, "completion_blocked": 1,
+                    "consistency_only": 2, "not_evaluated": 3,
+                }
+                for row in sorted(candidates, key=candidate_quality_key):
                     index = row["candidate_index"]
                     if index in attempted or index in next_active:
+                        continue
+                    if row["atom_kind"] != failed["atom_kind"]:
+                        continue
+                    if (impact_rank.get(row["answer_impact"], 3)
+                            > impact_rank.get(failed["answer_impact"], 3)):
+                        continue
+                    if (failed["actual_invalidations"]
+                            and not row["actual_invalidations"]):
+                        continue
+                    if (failed["history_conflicts_detected"]
+                            and not row["history_conflicts_detected"]):
                         continue
                     size = row["decision_rounds_post_fork"]
                     if 0 < size <= remaining_turns:
