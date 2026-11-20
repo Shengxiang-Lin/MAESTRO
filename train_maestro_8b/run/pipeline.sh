@@ -13,6 +13,9 @@ STAGE4_DIR="${STAGE4_DIR:-$ROOT/environment/data/stage4}"
 RUN_ROOT="${RUN_ROOT:-$ROOT/workspace/maestro_8b}"
 STAGE2_TRAINER="${STAGE2_TRAINER:-da}"     # da (default) or riskkv
 DA_REWARD_MODE="${DA_REWARD_MODE:-global}"  # global | hybrid | deterministic | judge_only | da
+DA_GRPO_CONFIG="${DA_GRPO_CONFIG:-$ROOT/train_maestro_8b/policy/grpo_config.yaml}"
+DA_MICRO_BATCH="${DA_MICRO_BATCH:-}"
+DA_GRAD_ACCUM="${DA_GRAD_ACCUM:-}"
 DA_DATA="${DA_DATA:-$RUN_ROOT/stage2_da}"
 DA_UNIFIED_DIR="${DA_UNIFIED_DIR:-$ROOT/environment/data/unified}"
 DA_INCLUDE_FALLBACK="${DA_INCLUDE_FALLBACK:-0}"
@@ -108,6 +111,8 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
   risk          Train Risk Head only, using cached NF4 features
   prepare-grpo  DA: canonical unified dataset -> train/val/test Parquet; RiskKV: private-state reward rows
   preflight     DA: independent package/input/reward-context checks; RiskKV: cache/logprob
+  serve-vllm    Start dedicated TRL/vLLM Server on rollout GPU (separate terminal)
+  plan-gpus     Preview rollout/training GPU placement and effective batch (no GPU)
   pilot         DA: 3-step smoke; hybrid: local validity + LLM semantic Judge
                 RiskKV: previous strict Action-reward pilot
   audit-pilot   DA: review Judge reward diagnostics; RiskKV: invalid reasons
@@ -122,6 +127,7 @@ Override settings via environment variables or run/config.env:
   DA_DATA, DA_UNIFIED_DIR, DA_INCLUDE_FALLBACK, DA_SPLIT_SEED, DA_SPLIT_MAP,
   DA_GRPO_CKPT, DA_PILOT_CKPT,
   DA_PILOT_STEPS, DA_PILOT_ROWS, DA_PILOT_NEW_TOKENS,
+  DA_GRPO_CONFIG, DA_MICRO_BATCH, DA_GRAD_ACCUM,
   MODEL, STAGE1_DIR, STAGE4_DIR, RUN_ROOT, MAX_LENGTH,
   BELIEF_DATA, BELIEF_CKPT, BELIEF_MAX_LENGTH, BELIEF_EPOCHS,
   BELIEF_MAX_STEPS, BELIEF_GRAD_ACCUM, BELIEF_BATCH_SIZE,
@@ -341,11 +347,11 @@ prepare_grpo() {
 stage2_da_args=()
 init_stage2_da_args() {
   stage2_da_args=(
+    --config "$DA_GRPO_CONFIG"
     --model "$MODEL" --train_file "$DA_DATA/train.parquet"
     --max_length "$GRPO_MAX_PROMPT_TOKENS"
     --max_new_tokens "$GRPO_MAX_NEW_TOKENS"
     --num_generations "$GRPO_GENERATIONS"
-    --gradient_accumulation_steps "$GRPO_GRAD_ACCUM"
     --vllm_memory_utilization "$GRPO_VLLM_MEMORY_UTILIZATION"
     --lr "$GRPO_LR" --weight_decay "$GRPO_WEIGHT_DECAY"
     --temperature "$GRPO_TEMPERATURE"
@@ -368,6 +374,25 @@ init_stage2_da_args() {
     --save_steps "$GRPO_SAVE_STEPS"
   )
   [[ -n "$STAGE1_BELIEF_ADAPTER" ]] && stage2_da_args+=(--stage1_belief_adapter "$STAGE1_BELIEF_ADAPTER")
+  [[ -n "$DA_MICRO_BATCH" ]] && stage2_da_args+=(--micro_batch_size "$DA_MICRO_BATCH")
+  [[ -n "$DA_GRAD_ACCUM" ]] && stage2_da_args+=(--gradient_accumulation_steps "$DA_GRAD_ACCUM")
+}
+stage2_da_launch() {
+  python -m train_maestro_8b.run.launch_grpo --role train \
+    --config "$DA_GRPO_CONFIG" --model "$MODEL" -- "$@"
+}
+stage2_da_serve() {
+  need_model
+  python -m train_maestro_8b.run.launch_grpo --role serve \
+    --config "$DA_GRPO_CONFIG" --model "$MODEL"
+}
+stage2_da_plan() {
+  python -m train_maestro_8b.run.launch_grpo --role serve \
+    --config "$DA_GRPO_CONFIG" --model "$MODEL" --dry-run
+  init_stage2_da_args
+  python -m train_maestro_8b.run.launch_grpo --role train \
+    --config "$DA_GRPO_CONFIG" --model "$MODEL" --dry-run -- "${stage2_da_args[@]}" \
+    --output_dir "$DA_PILOT_CKPT" --max_steps "$DA_PILOT_STEPS"
 }
 stage2_da_check() {
   need_model; need "$DA_DATA/train.parquet"
@@ -391,20 +416,22 @@ stage2_da_pilot() {
   fi
   init_stage2_da_args
   say "Stage2 native TRL Pilot: reward=$DA_REWARD_MODE; risk head OFF"
-  python -m train_maestro_8b.policy.train da "${stage2_da_args[@]}" \
+  stage2_da_launch "${stage2_da_args[@]}" \
     --output_dir "$DA_PILOT_CKPT" --max_steps "$DA_PILOT_STEPS" \
     --max_train_rows "$DA_PILOT_ROWS" --max_new_tokens "$DA_PILOT_NEW_TOKENS"
-  need "$DA_PILOT_CKPT/reward_diagnostics.jsonl"
-  python - "$DA_PILOT_CKPT/reward_diagnostics.jsonl" <<'PY'
+  python - "$DA_PILOT_CKPT" <<'PY'
 import json,sys
+from pathlib import Path
 from collections import defaultdict
+paths=sorted(Path(sys.argv[1]).glob("reward_diagnostics*.jsonl"))
+if not paths: raise SystemExit("No Stage2 reward_diagnostics files; inspect all training ranks")
 groups=defaultdict(list)
-for line in open(sys.argv[1], encoding="utf-8"):
+for line in (line for path in paths for line in path.open(encoding="utf-8")):
     x=json.loads(line)
     groups[(x["batch_id"],x["group_index"])].append(float(x["reward"]))
 nonzero=sum(max(vals)-min(vals)>1e-7 for vals in groups.values())
 valid=judged=0
-for line in open(sys.argv[1], encoding="utf-8"):
+for line in (line for path in paths for line in path.open(encoding="utf-8")):
     row=json.loads(line)
     valid+=int(row.get("valid") is True)
     judged+=int(row.get("judge_reward") is not None)
@@ -413,7 +440,7 @@ if not groups or not nonzero:
     raise SystemExit("No GRPO preference signal; inspect action validity and JSON normalization before full training")
 if valid == 0 and judged == 0 and any(
     "valid" in json.loads(line)
-    for line in open(sys.argv[1], encoding="utf-8")
+    for line in (line for path in paths for line in path.open(encoding="utf-8"))
 ):
     raise SystemExit("Stage2 Hybrid Pilot has no valid Action; stop before full GRPO")
 PY
@@ -430,7 +457,7 @@ stage2_da_grpo() {
   local resume=()
   [[ -n "$GRPO_RESUME_FROM" ]] && resume=(--resume_from_checkpoint "$GRPO_RESUME_FROM")
   say "Main Stage2 training: Unsloth + TRL GRPOTrainer, reward=$DA_REWARD_MODE, Risk Head OFF"
-  python -m train_maestro_8b.policy.train da "${stage2_da_args[@]}" \
+  stage2_da_launch "${stage2_da_args[@]}" \
     --output_dir "$DA_GRPO_CKPT" --epochs "$GRPO_EPOCHS" \
     --max_steps "$GRPO_MAX_STEPS" "${resume[@]}"
 }
@@ -547,8 +574,8 @@ grpo() {
 }
 audit_pilot() {
   if [[ "$STAGE2_TRAINER" == "da" ]]; then
-    need "$DA_PILOT_CKPT/reward_diagnostics.jsonl"
-    tail -n "$GRPO_GENERATIONS" "$DA_PILOT_CKPT/reward_diagnostics.jsonl"
+    ls "$DA_PILOT_CKPT"/reward_diagnostics*.jsonl >/dev/null || die "No diagnostics"
+    tail -n "$GRPO_GENERATIONS" "$DA_PILOT_CKPT"/reward_diagnostics*.jsonl
     return
   fi
   need "$RUN_ROOT/reward_pilot.jsonl"
@@ -589,6 +616,8 @@ case "${1:-help}" in
   features) extract_features ;;
   risk) train_risk ;;
   prepare-grpo) prepare_grpo ;;
+  serve-vllm) [[ "$STAGE2_TRAINER" == "da" ]] || die "Only Stage2 DA/GRPO supports vLLM Server"; stage2_da_serve ;;
+  plan-gpus) [[ "$STAGE2_TRAINER" == "da" ]] || die "Only Stage2 DA/GRPO supports vLLM Server"; stage2_da_plan ;;
   inspect-io) inspect_io ;;
   preflight) preflight ;;
   pilot) pilot ;;

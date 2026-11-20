@@ -2,7 +2,7 @@
 
 This is an independent Stage-2-owned implementation of the validated DA
 training mechanics. No baseline/da-grpo source is imported:
-- Unsloth FastLanguageModel BF16 LoRA + colocated vLLM
+- Unsloth FastLanguageModel BF16 LoRA + TRL external vLLM Server Mode
 - Qwen3 Chat Template and TRL GRPOTrainer, DAPO + 0.01 KL
 - Global Evidence & Recovery LLM Judge (default): graph+visible facts+recovery
 - Legacy MAESTRO hybrid 0.6/0.4 and DA 4D Judge kept as explicit ablations.
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 
@@ -41,7 +42,10 @@ def build_stage2_config(args):
     cfg["training"]["logging_steps"] = args.logging_steps
     cfg["rollout"]["temperature"] = args.temperature
     cfg["rollout"]["num_generations"] = args.num_generations
-    cfg["rollout"]["prompts_per_step"] = args.gradient_accumulation_steps
+    if getattr(args, "micro_batch_size", None) is not None:
+        cfg["training"]["per_device_train_batch_size"] = args.micro_batch_size
+    if args.gradient_accumulation_steps is not None:
+        cfg["training"]["gradient_accumulation_steps"] = args.gradient_accumulation_steps
     cfg["rollout"]["max_prompt_tokens"] = args.max_length
     cfg["rollout"]["max_completion_tokens"] = args.max_new_tokens
     cfg["rollout"]["max_num_seqs"] = max(
@@ -64,7 +68,7 @@ def build_stage2_config(args):
     if (args.max_length + args.max_new_tokens > cfg["model"]["max_seq_length"]
             or args.max_length < 1 or args.max_new_tokens < 1):
         raise ValueError("Stage2 prompt+generation exceeds Qwen3 context")
-    if args.num_generations < 2 or args.gradient_accumulation_steps < 1:
+    if args.num_generations < 2 or cfg["training"]["gradient_accumulation_steps"] < 1 or cfg["training"]["per_device_train_batch_size"] < 1:
         raise ValueError("DA GRPO requires >=2 candidates and >=1 prompt group")
     if (args.epochs <= 0 or args.max_steps == 0 or args.lr <= 0
             or args.max_grad_norm <= 0 or args.weight_decay < 0
@@ -75,6 +79,7 @@ def build_stage2_config(args):
             or not 0 <= args.warmup_ratio < 1
             or args.save_steps < 1 or args.logging_steps < 1):
         raise ValueError("Invalid Stage2 DA training settings")
+    runtime.batch_plan(cfg)  # Validate global completions divisible by G.
     return cfg
 
 
@@ -87,12 +92,26 @@ def train_stage2(cfg: dict, *, resume: str | None, args):
     runtime.configure_runtime(cfg)
     print("[MAESTRO/Stage2] native DA GRPO; no Stage1 Risk Head/KV steering", flush=True)
     import torch
-    if torch.cuda.device_count() != 1 or not torch.cuda.is_bf16_supported():
-        raise RuntimeError("Stage2 DA requires one BF16-capable CUDA GPU")
+    topology = cfg["distributed"]
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    rank = int(os.environ.get("RANK", "0"))
+    if world_size != topology["train_gpus"]:
+        raise RuntimeError(
+            f"Stage2 expects {topology['train_gpus']} training processes, "
+            f"but WORLD_SIZE={world_size}; start via pipeline.sh pilot/grpo"
+        )
+    if not 0 <= local_rank < torch.cuda.device_count():
+        raise RuntimeError("Stage2 LOCAL_RANK has no visible training GPU")
+    torch.cuda.set_device(local_rank)
+    if not torch.cuda.is_bf16_supported():
+        raise RuntimeError("Stage2 requires BF16-capable training GPUs")
 
-    # Unsloth MUST patch before importing TRL GRPOTrainer.
+    # Unsloth must patch before importing TRL, but standalone vLLM is
+    # launched by a separate process on the rollout-only GPU.
     from unsloth import FastLanguageModel
-    runtime.disable_vllm_flashinfer_autotune()
+    if topology["vllm_mode"] == "colocate":
+        runtime.disable_vllm_flashinfer_autotune()
     from trl import GRPOConfig, GRPOTrainer
     from datasets import Dataset
     from train_maestro_8b.policy.da_reward_adapter import make_reward_function as make_da_reference_reward
@@ -120,7 +139,7 @@ def train_stage2(cfg: dict, *, resume: str | None, args):
     if args.reward_mode == "da":
         reward_function = make_da_reference_reward(
             cfg["judge"]["workers"],
-            diagnostics_path=cfg["paths"]["output_dir"] / "reward_diagnostics.jsonl",
+            diagnostics_path=runtime.ranked_path(cfg["paths"]["output_dir"] / "reward_diagnostics.jsonl"),
             num_generations=cfg["rollout"]["num_generations"],
         )
     else:
@@ -144,24 +163,29 @@ def train_stage2(cfg: dict, *, resume: str | None, args):
             private_states=private_states, prompts=prompt_lookup(rows),
             mode=args.reward_mode, judge=judge, judge_weight=args.judge_weight,
             num_generations=cfg["rollout"]["num_generations"],
-            diagnostics_path=cfg["paths"]["output_dir"] / "reward_diagnostics.jsonl",
+            diagnostics_path=runtime.ranked_path(cfg["paths"]["output_dir"] / "reward_diagnostics.jsonl"),
             global_contexts=global_contexts,
         )
-    print(f"[MAESTRO/Stage2] {len(rows)} reward-compatible Main decisions; "
-          f"batch_plan={runtime.batch_plan(cfg)}", flush=True)
+    if rank == 0:
+        print(f"[MAESTRO/Stage2] {len(rows)} reward-compatible Main decisions; "
+              f"batch_plan={runtime.batch_plan(cfg)}", flush=True)
     model_cfg, rollout = cfg["model"], cfg["rollout"]
-    policy, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=str(cfg["paths"]["model"]),
-        max_seq_length=model_cfg["max_seq_length"],
-        dtype=torch.bfloat16,
-        load_in_4bit=model_cfg["load_in_4bit"],
-        fast_inference=True,
-        max_lora_rank=model_cfg["lora_rank"],
-        gpu_memory_utilization=rollout["gpu_memory_utilization"],
-        max_num_seqs=rollout["max_num_seqs"],
-        float8_kv_cache=False,
-        enforce_eager=rollout["enforce_eager"],
-    )
+    model_kwargs = {
+        "model_name": str(cfg["paths"]["model"]),
+        "max_seq_length": model_cfg["max_seq_length"],
+        "dtype": torch.bfloat16,
+        "load_in_4bit": model_cfg["load_in_4bit"],
+        "fast_inference": topology["vllm_mode"] == "colocate",
+    }
+    if topology["vllm_mode"] == "colocate":
+        model_kwargs.update({
+            "max_lora_rank": model_cfg["lora_rank"],
+            "gpu_memory_utilization": rollout["gpu_memory_utilization"],
+            "max_num_seqs": rollout["max_num_seqs"],
+            "float8_kv_cache": False,
+            "enforce_eager": rollout["enforce_eager"],
+        })
+    policy, tokenizer = FastLanguageModel.from_pretrained(**model_kwargs)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     # DA uses Qwen3 role/chat templates, not raw continuation+newline.
@@ -197,7 +221,8 @@ def train_stage2(cfg: dict, *, resume: str | None, args):
     trainer.train(resume_from_checkpoint=resume)
     dest = cfg["paths"]["output_dir"] / "final_adapter"
     trainer.save_model(str(dest))
-    tokenizer.save_pretrained(str(dest))
+    if rank == 0:
+        tokenizer.save_pretrained(str(dest))
 
 
 def make_semantic_judge(args, cfg):
@@ -206,6 +231,7 @@ def make_semantic_judge(args, cfg):
     cache = args.judge_cache_jsonl or str(
         cfg["paths"]["output_dir"] / "semantic_judge_cache.jsonl"
     )
+    cache = str(runtime.ranked_path(cache))
     return SemanticJudge.from_registry(
         registry_path=cfg["judge"]["registry"],
         model=cfg["judge"]["model"],
@@ -222,6 +248,7 @@ def make_global_judge_instance(args, cfg):
     cache = args.judge_cache_jsonl or str(
         cfg["paths"]["output_dir"] / "global_judge_cache.jsonl"
     )
+    cache = str(runtime.ranked_path(cache))
     return make_global_judge(
         registry_path=cfg["judge"]["registry"],
         model=cfg["judge"]["model"],
@@ -311,11 +338,15 @@ def run(args):
     train_stage2(
         cfg, resume=args.resume_from_checkpoint, args=args,
     )
+    if int(os.environ.get("RANK", "0")) != 0:
+        return
     destination = cfg["paths"]["output_dir"] / "stage2_da_training.json"
     destination.write_text(json.dumps({
         "schema": "maestro.stage2_da_training.v1",
         "trainer": "trl.GRPOTrainer",
-        "rollout": "unsloth_colocated_vllm",
+        "rollout": "trl_vllm_" + cfg["distributed"]["vllm_mode"],
+        "distributed": cfg["distributed"],
+        "batch_plan": runtime.batch_plan(cfg),
         "stage1_risk_head": False,
         "riskkv": False,
         "stage1_belief_adapter": str(args.stage1_belief_adapter) if args.stage1_belief_adapter else None,
@@ -339,7 +370,7 @@ def main(argv=None):
     p.add_argument("--config", default=str(DEFAULT_CONFIG))
     p.add_argument("--model", required=True)
     p.add_argument("--train_file", required=True,
-                   help="Stage2-owned Stage4 DA-format Parquet")
+                   help="Stage2-specific train.parquet prepared from unified Environment decisions")
     p.add_argument("--output_dir", required=True)
     p.add_argument("--max_train_rows", type=int, default=0)
     p.add_argument("--stage1_belief_adapter", default=None,
@@ -347,8 +378,10 @@ def main(argv=None):
     p.add_argument("--epochs", type=float, default=3.0)
     p.add_argument("--max_steps", type=int, default=-1)
     p.add_argument("--num_generations", type=int, default=8)
-    p.add_argument("--gradient_accumulation_steps", type=int, default=1,
-                   help="Distinct Main prompts per optimizer step, not completions")
+    p.add_argument("--gradient_accumulation_steps", type=int, default=None,
+                   help="Actual optimizer gradient accumulation steps, per training GPU")
+    p.add_argument("--micro_batch_size", type=int, default=None,
+                   help="Completion micro-batch per training GPU")
     p.add_argument("--max_length", type=int, default=12288)
     p.add_argument("--max_new_tokens", type=int, default=4096)
     p.add_argument("--vllm_memory_utilization", type=float, default=0.70)
@@ -378,7 +411,7 @@ def main(argv=None):
     p.add_argument("--claim_states",
                    default="environment/data/stage4/private/claim_state_supervision.jsonl")
     p.add_argument("--decision_states",
-                   default="environment/data/stage4/private/decision_reward_states.jsonl",
+                   default="workspace/maestro_8b/stage2_da/private/decision_reward_states.jsonl",
                    help="Local private pre-action state sidecar, never sent to policy/Judge")
     p.add_argument("--judge_weight", type=float, default=0.4)
     p.add_argument("--judge_timeout", type=float, default=90.0)

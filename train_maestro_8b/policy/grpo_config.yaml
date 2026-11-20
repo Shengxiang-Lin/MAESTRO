@@ -1,5 +1,5 @@
-# MAESTRO standalone Stage2 GRPO: Unsloth + TRL + colocated vLLM
-# Single RTX 6000D (83 GiB). Separate Python env recommended.
+# MAESTRO standalone Stage2 GRPO: Unsloth + TRL + dedicated vLLM server
+# Default: GPU 0 rollout + GPU 1 trainer (two-GPU pilot). For four cards, set train_gpus: 3.
 version: 2
 
 paths:
@@ -24,7 +24,6 @@ model:
   lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
 
 rollout:
-  prompts_per_step: 1
   num_generations: 8
   # Total context = 12,288 prompt + 4,096 generated = 16,384 tokens.
   max_prompt_tokens: 12288
@@ -35,7 +34,7 @@ rollout:
   # KV reservation. Leave headroom for long-context BF16 LoRA backward.
   gpu_memory_utilization: 0.70
   standby_util_override: true
-  # One prompt x eight candidates; cap concurrent vLLM requests at eight.
+  # Eight completions per prompt; concurrency can be raised after pilot.
   max_num_seqs: 8
   # FLASH_ATTN on RTX 6000D SM120 rejects FP8 KV Cache (requires other
   # FA3/FA4 and device/head-size combinations). With BF16 model, auto = BF16 KV.
@@ -47,7 +46,17 @@ rollout:
   enforce_eager: true
   standby: true
 
+distributed:
+  vllm_mode: server
+  train_gpus: 1
+  rollout_gpu: 0
+  train_gpu_start: 1
+  server_host: 127.0.0.1
+  server_port: 8000
+
 training:
+  per_device_train_batch_size: 1  # completion micro-batch PER training GPU
+  gradient_accumulation_steps: 8  # 8 completions / prompt group
   epochs: 3
   max_steps: -1
   learning_rate: 0.00005

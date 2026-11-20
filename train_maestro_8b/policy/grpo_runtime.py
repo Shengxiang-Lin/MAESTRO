@@ -1,6 +1,6 @@
 """Standalone MAESTRO Stage2 GRPO runtime helpers.
 
-Preserves the reference Unsloth / TRL / colocated-vLLM training mechanics.
+Preserves the reference Unsloth / TRL training mechanics with dedicated vLLM Server Mode.
 No imports, configuration or file paths from baseline/da-grpo are needed.
 Only GPU-free configuration/data/runtime functions live in this module;
 train_maestro_8b.policy.da_backend constructs and executes GRPOTrainer.
@@ -37,9 +37,9 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
     cfg = yaml.safe_load(source.read_text(encoding="utf-8"))
     if not isinstance(cfg, dict) or cfg.get("version") != 2:
         raise ValueError("MAESTRO Stage2 requires Unsloth/TRL config version: 2")
-    if set(cfg) != {"version", "paths", "judge", "model", "rollout", "training"}:
+    if set(cfg) != {"version", "paths", "judge", "model", "rollout", "distributed", "training"}:
         raise ValueError("Invalid top-level configuration sections")
-    for name in ("paths", "judge", "model", "rollout", "training"):
+    for name in ("paths", "judge", "model", "rollout", "distributed", "training"):
         if not isinstance(cfg[name], dict):
             raise ValueError(f"{name} must be a mapping")
 
@@ -80,14 +80,14 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
             raise ValueError(f"Invalid model.{key}")
 
     rollout = cfg["rollout"]
-    expected = {"prompts_per_step", "num_generations", "max_prompt_tokens",
+    expected = {"num_generations", "max_prompt_tokens",
                 "max_completion_tokens", "temperature", "top_p",
                 "gpu_memory_utilization", "max_num_seqs", "kv_cache_dtype",
                 "disable_flashinfer", "enforce_eager", "standby",
                 "standby_util_override"}
     if set(rollout) != expected:
         raise ValueError("Invalid rollout configuration")
-    for key in ("prompts_per_step", "num_generations", "max_prompt_tokens",
+    for key in ("num_generations", "max_prompt_tokens",
                 "max_completion_tokens", "max_num_seqs"):
         if type(rollout[key]) is not int or rollout[key] < 1:
             raise ValueError(f"Invalid rollout.{key}")
@@ -117,12 +117,36 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
             "gpu_memory_utilization is not silently forced to ~0.879"
         )
 
+    distributed = cfg["distributed"]
+    required_topology = {"vllm_mode", "train_gpus", "rollout_gpu",
+                         "train_gpu_start", "server_host", "server_port"}
+    if set(distributed) != required_topology:
+        raise ValueError("Invalid distributed Stage2 configuration")
+    if distributed["vllm_mode"] not in ("server", "colocate"):
+        raise ValueError("vllm_mode must be server or colocate")
+    for key in ("train_gpus", "rollout_gpu", "train_gpu_start", "server_port"):
+        val = distributed[key]
+        if type(val) is not int or val < (0 if key == "rollout_gpu" else 1):
+            raise ValueError(f"Invalid distributed.{key}")
+    if distributed["server_port"] > 65535:
+        raise ValueError("Invalid vLLM server port")
+    if distributed["server_host"] not in ("localhost", "127.0.0.1"):
+        raise ValueError("Dedicated vLLM server must bind to localhost")
+    train_gpu_ids = range(distributed["train_gpu_start"],
+                          distributed["train_gpu_start"] + distributed["train_gpus"])
+    if (distributed["vllm_mode"] == "server" and
+            distributed["rollout_gpu"] in train_gpu_ids):
+        raise ValueError("Rollout and training GPUs must not overlap")
+    if distributed["vllm_mode"] == "colocate" and distributed["train_gpus"] != 1:
+        raise ValueError("Legacy colocate path supports one GPU only")
     train = cfg["training"]
-    required = {"epochs", "max_steps", "learning_rate", "weight_decay", "warmup_ratio",
+    required = {"per_device_train_batch_size", "gradient_accumulation_steps", "epochs", "max_steps", "learning_rate", "weight_decay", "warmup_ratio",
                 "clip_range", "kl_coef", "loss_type", "optim",
                 "max_grad_norm", "save_steps", "logging_steps", "seed"}
     if set(train) != required:
         raise ValueError("Invalid training configuration")
+    if any(type(train[key]) is not int or train[key] < 1 for key in ("per_device_train_batch_size", "gradient_accumulation_steps")):
+        raise ValueError("Training microbatch and gradient accumulation must be positive integers")
     if train["loss_type"] != "dapo":
         raise ValueError("MAESTRO uses token-normalized DAPO-style GRPO loss")
     if train["optim"] != "adamw_8bit":
@@ -140,20 +164,39 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
     return cfg
 
 
-def batch_plan(cfg: dict) -> dict[str, int]:
-    rollout = cfg["rollout"]
-    # In TRL, per_device_train_batch_size counts completions (NOT prompts).
-    # Stream one completion per backward pass. The effective batch is
-    # prompts_per_step * num_generations (default 1 * 8 = 8).
-    # Accumulate that many gradients for one optimizer step.
-    generation_batch = rollout["prompts_per_step"] * rollout["num_generations"]
+def batch_plan(cfg: dict) -> dict[str, int | None]:
+    """Full/global completion accounting; B is the per-device microbatch."""
+    rollout, training, dist = cfg["rollout"], cfg["training"], cfg["distributed"]
+    b = training["per_device_train_batch_size"]
+    a = training["gradient_accumulation_steps"]
+    g = rollout["num_generations"]
+    global_completions = dist["train_gpus"] * b * a
+    if global_completions % g:
+        raise ValueError(
+            f"Global completion batch {global_completions} must be divisible by "
+            f"num_generations={g}; adjust training microbatch/accumulation"
+        )
     return {
-        "per_device_train_batch_size": 1,
-        "gradient_accumulation_steps": generation_batch,
-        "generation_batch_size": generation_batch,
-        "num_generations": rollout["num_generations"],
-        "prompts_per_step": rollout["prompts_per_step"],
+        "per_device_train_batch_size": b,
+        "gradient_accumulation_steps": a,
+        "generation_batch_size": None,  # TRL derives the distributed batch.
+        "num_generations": g,
+        "train_gpus": dist["train_gpus"],
+        "global_completions_per_step": global_completions,
+        "prompts_per_step": global_completions // g,
     }
+
+
+def ranked_path(path: str | Path) -> Path:
+    """Isolate per-rank reward diagnostics/cache writes under DDP."""
+    dest = Path(path)
+    world = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    if not 0 <= rank < world:
+        raise ValueError("Invalid distributed RANK/WORLD_SIZE")
+    if world == 1:
+        return dest
+    return dest.with_name(f"{dest.stem}.rank{rank:02d}{dest.suffix}")
 
 
 def environment_checks(cfg: dict) -> dict[str, bool]:
@@ -167,12 +210,13 @@ def environment_checks(cfg: dict) -> dict[str, bool]:
 def show_config(cfg: dict) -> None:
     checks = environment_checks(cfg)
     print(json.dumps({
-        "backend": "Unsloth + TRL GRPOTrainer + colocated vLLM",
+        "backend": "Unsloth + TRL GRPOTrainer + " + cfg["distributed"]["vllm_mode"] + " vLLM",
         "config": str(cfg["_source"]),
         "model": str(cfg["paths"]["model"]),
         "train_parquet": str(cfg["paths"]["train_parquet"]),
         "output_dir": str(cfg["paths"]["output_dir"]),
         "batch_plan": batch_plan(cfg),
+        "distributed": cfg["distributed"],
         "epochs": cfg["training"]["epochs"],
         "loss_type": cfg["training"]["loss_type"],
         "beta": cfg["training"]["kl_coef"],
@@ -290,7 +334,9 @@ def configure_runtime(cfg: dict) -> None:
     # Not a recognized setting in this vLLM 0.32.0 build: it was ignored
     # and the installed default selected FLASHINFER despite TRITON_ATTN.
     os.environ.pop("VLLM_ATTENTION_BACKEND", None)
-    os.environ["UNSLOTH_VLLM_STANDBY"] = "1" if cfg["rollout"]["standby"] else "0"
+    os.environ["UNSLOTH_VLLM_STANDBY"] = (
+        "1" if cfg["distributed"]["vllm_mode"] == "colocate" and cfg["rollout"]["standby"] else "0"
+    )
     # Otherwise Unsloth silently replaces the requested 0.35 utilization with
     # ~0.879 on 83 GiB GPUs. Its official override preserves this budget.
     os.environ["UNSLOTH_VLLM_STANDBY_UTIL_OVERRIDE"] = (
@@ -332,7 +378,7 @@ def build_grpo_kwargs(cfg: dict) -> dict:
     """Pure constructor argument mapper; tested without importing CUDA libraries."""
     plan = batch_plan(cfg)
     rollout, train, paths = cfg["rollout"], cfg["training"], cfg["paths"]
-    return {
+    result = {
         "output_dir": str(paths["output_dir"]),
         "per_device_train_batch_size": plan["per_device_train_batch_size"],
         "gradient_accumulation_steps": plan["gradient_accumulation_steps"],
@@ -368,13 +414,20 @@ def build_grpo_kwargs(cfg: dict) -> dict:
         "gradient_checkpointing_kwargs": {"use_reentrant": False},
         # Unsloth attaches its shared vLLM engine when fast_inference=True.
         "use_vllm": True,
-        "vllm_mode": "colocate",
+        "vllm_mode": cfg["distributed"]["vllm_mode"],
         "vllm_gpu_memory_utilization": rollout["gpu_memory_utilization"],
         "vllm_max_model_length": cfg["model"]["max_seq_length"],
-        "vllm_enable_sleep_mode": True,
+        "vllm_enable_sleep_mode": cfg["distributed"]["vllm_mode"] == "colocate",
         "vllm_tensor_parallel_size": 1,
+        "ddp_find_unused_parameters": False,
         # TRL's optional train/inference IS correction is NOT part of O1;
         # disable it for closer parity with original O1/verl sampling.
         "vllm_importance_sampling_correction": False,
     }
+    if cfg["distributed"]["vllm_mode"] == "server":
+        result.update({
+            "vllm_server_host": cfg["distributed"]["server_host"],
+            "vllm_server_port": cfg["distributed"]["server_port"],
+        })
+    return result
 

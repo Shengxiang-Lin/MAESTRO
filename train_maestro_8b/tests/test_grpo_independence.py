@@ -23,9 +23,15 @@ class StandaloneGRPOTests(unittest.TestCase):
         kwargs = grpo_runtime.build_grpo_kwargs(cfg)
         self.assertEqual(kwargs["loss_type"], "dapo")
         self.assertEqual(kwargs["beta"], 0.01)
-        self.assertEqual(kwargs["vllm_mode"], "colocate")
-        self.assertEqual(kwargs["generation_batch_size"], 8)
+        self.assertEqual(kwargs["vllm_mode"], "server")
+        self.assertIsNone(kwargs["generation_batch_size"])
         self.assertTrue(kwargs["use_vllm"])
+        self.assertFalse(kwargs["vllm_enable_sleep_mode"])
+        self.assertEqual(kwargs["vllm_server_host"], "127.0.0.1")
+        self.assertEqual(kwargs["vllm_server_port"], 8000)
+        self.assertEqual(plan["global_completions_per_step"], 8)
+        self.assertEqual(plan["prompts_per_step"], 1)
+        self.assertEqual(cfg["distributed"]["train_gpus"], 1)
 
     def test_all_stage2_modules_are_free_of_baseline_imports_and_paths(self):
         root = Path(__file__).resolve().parents[2]

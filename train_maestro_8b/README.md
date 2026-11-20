@@ -1,3 +1,35 @@
+## Dual-GPU GRPO smoke test (1 rollout GPU + 1 trainer GPU)
+
+The default `train_maestro_8b/policy/grpo_config.yaml` contains
+`distributed.vllm_mode: server`, `distributed.train_gpus: 1`,
+`rollout_gpu: 0`, `train_gpu_start: 1`. Changing ONLY `train_gpus: 3`
+assigns GPUs 1,2,3 to `torchrun` DDP, leaving GPU 0 dedicated to rollout.
+No manual per-GPU `CUDA_VISIBLE_DEVICES`/`--nproc_per_node` is needed.
+
+```bash
+# Once the canonical Environment dataset is available:
+bash train_maestro_8b/run/pipeline.sh prepare-grpo
+bash train_maestro_8b/run/pipeline.sh preflight
+bash train_maestro_8b/run/pipeline.sh plan-gpus
+
+# Terminal A: keep this process running; serves GPU 0 only
+bash train_maestro_8b/run/pipeline.sh serve-vllm
+
+# Terminal B: GPU 1 training, requires the server to respond on localhost
+bash train_maestro_8b/run/pipeline.sh judge
+DA_PILOT_NEW_TOKENS=4096 bash train_maestro_8b/run/pipeline.sh pilot
+bash train_maestro_8b/run/pipeline.sh audit-pilot
+```
+
+`training.per_device_train_batch_size=1` and
+`training.gradient_accumulation_steps=8` with `num_generations=8`
+means 8 completions / 1 prompt on the dual-card setup.
+With 3 train GPUs, that becomes 24 completions / 3 prompts.
+Server Mode uses TRL native vLLM weight transfer and standard DDP.
+The Python launcher isolates rank-specific Judge caches/diagnostics.
+Never expose the Server Mode development endpoint outside localhost.
+
+---
 ## Canonical Environment dataset -> standalone Stage2 GRPO
 
 The Stage2 training data source is the method-independent dataset produced
