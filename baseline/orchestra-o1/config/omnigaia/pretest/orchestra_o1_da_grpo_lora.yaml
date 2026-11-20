@@ -3,7 +3,9 @@
 # Deployment details are defined in config/model_config.yaml.
 # Before running:
 #   export QWEN3_8B_MODEL_PATH=/path/to/Qwen3-8B
-# LoRA adapter path: QWEN3_8B_DA_GRPO_ADAPTER_PATH\n# Defaults/port/GPU/enable_thinking: config/model_config.yaml\nmain_model: "qwen3-8b-da-grpo-lora"
+# LoRA adapter path: QWEN3_8B_DA_GRPO_ADAPTER_PATH
+# Defaults/port/GPU/enable_thinking: config/model_config.yaml
+main_model: "qwen3-8b-da-grpo-lora"
 sub_models:
   - "qwen3.8-max"
 
