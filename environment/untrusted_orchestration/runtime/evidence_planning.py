@@ -80,6 +80,12 @@ def evidence_request(state, task_id: str, *, round_number: int,
         operation = "derive_from_returned_evidence"
     missing = list(dict.fromkeys(missing))
     focus = missing or target
+    # Focus is a *public claim to inspect*, not a reduced output schema or
+    # an executable operator slice. Keep the frozen Macro output contract.
+    verification_focus = (
+        state.public_verification_focus(task_id, issue=issue)
+        if operation == "verify_conflicting_evidence" else None
+    )
     identifiers = (
         list(dict.fromkeys(_IDENT.findall(issue)))[:4]
         if issue else _visible_identifiers(state, task)
@@ -117,6 +123,7 @@ def evidence_request(state, task_id: str, *, round_number: int,
         "request_id": f"R{round_number:02d}-E{task_id}",
         "operation": operation,
         "target_fields": focus,
+        "verification_focus": verification_focus,
         "required_parent_fields": required,
         "known_identifiers": identifiers,
         "unresolved_fields": missing,
@@ -146,6 +153,7 @@ def evidence_assignment(state, task_id: str, *, catalog: dict,
     fields = ", ".join(request["target_fields"])
     ids = ", ".join(request["known_identifiers"])
     operation = request["operation"]
+    verification_focus = request.get("verification_focus")
     if operation == "verify_conflicting_evidence":
         objective = (
             "Reconcile the visible conflicting identifiers or values. "
@@ -181,6 +189,24 @@ def evidence_assignment(state, task_id: str, *, catalog: dict,
             "Acquire the next missing evidence required by the question "
             "using the authorized source and prerequisite observations."
         )
+    # In a multi-output Macro, a dispute can concern one input/claim even
+    # though the legal task must still return every required output. State
+    # which observable claim needs checking; do not assert either value true.
+    if operation == "verify_conflicting_evidence" and verification_focus:
+        attribute = verification_focus["attribute"]
+        subject = verification_focus["subject"]
+        witness = (
+            "the Result and Summary of one returned report"
+            if verification_focus["basis"] == "result_summary_disagreement"
+            else "the already received, conflicting reports"
+        )
+        objective += (
+            " Focus the verification on the reported " + attribute
+            + " claim for " + subject + ", disputed in " + witness
+            + ". Retain other required output fields in the final handoff,"
+            " but do not describe those fields as independently verified"
+            " merely because they were returned."
+        )
     context = base["context"]
     if ids:
         context += " Previously reported identifiers: " + ids + "."
@@ -190,6 +216,12 @@ def evidence_assignment(state, task_id: str, *, catalog: dict,
         str(old_finish.get("result") or "") + " "
         + str(old_finish.get("summary") or "")
     )))[:5]
+    if verification_focus and operation == "verify_conflicting_evidence":
+        context += (
+            " Specific public claim to recheck: "
+            + verification_focus["attribute"] + " for "
+            + verification_focus["subject"] + "."
+        )
     if observed_ids and operation in {
         "retry_missing_evidence", "complete_partial_evidence",
         "verify_conflicting_evidence", "recheck_prior_evidence",
