@@ -650,46 +650,25 @@ class ExecutionState:
         return None
 
     def _visible_report_internal_conflict(self, task_id: str) -> str | None:
-        """Compare RESULT with SUMMARY using ONLY the delivered report.
+        """Compare explicit, same-object delivered Result/Summary claims.
 
-        The clean private WorkProduct cannot be used to label a report
-        erroneous, since the Main did not observe that private result.
+        Ambiguous multi-record summaries and unparseable values are unknown,
+        not contradictions. Never access the clean WorkProduct or Gold.
         """
-        finish = (self.public_reports.get(task_id) or {}).get(
-            "finish_result"
-        ) or {}
-        try:
-            from .reporting.surface import delivered_records
-            rows = delivered_records(finish.get("result", ""))
-        except (TypeError, ValueError):
+        from .inspection.claim_comparison import report_claim_conflicts
+        report = self.public_reports.get(task_id) or {}
+        conflicts = report_claim_conflicts(report)
+        if not conflicts:
             return None
-        if isinstance(rows, dict):
-            rows = [rows]
-        if not isinstance(rows, list) or not rows:
-            return None
-        if not isinstance(rows[0], dict):
-            return None
-        if "values" in rows[0] and isinstance(rows[0]["values"], dict):
-            rows = [row["values"] for row in rows
-                    if isinstance(row, dict) and "values" in row]
-        summary = str(finish.get("summary") or "")
-        for match in re.finditer(
-            r"\bsummary records?\s+([A-Za-z][A-Za-z0-9_ ]+)"
-            r"\s*=\s*([^.;,]+)", summary, flags=re.I,
-        ):
-            field = match.group(1).strip().replace(" ", "_")
-            claimed = match.group(2).strip()
-            values = {str(row[field]) for row in rows
-                      if isinstance(row, dict) and field in row}
-            if values and claimed not in values:
-                return (
-                    "The delivered result and summary disagree about "
-                    + field.replace("_", " ") + ": result lists "
-                    + ", ".join(sorted(values)[:4])
-                    + ", but the summary says " + claimed
-                    + ". Check the field against its source."
-                )
-        return None
+        conflict = conflicts[0]
+        return (
+            "The returned Result and Summary explicitly disagree about "
+            + conflict["field"].replace("_", " ") + " for "
+            + conflict["subject"] + ": Result states "
+            + conflict["result_value"] + ", Summary states "
+            + conflict["summary_value"] + ". Verify this association "
+            "against the reported evidence before using it."
+        )
 
     def visible_discrepancy(self, task_id: str) -> str | None:
         """Find a contradiction using only facts *reported* to Main.
