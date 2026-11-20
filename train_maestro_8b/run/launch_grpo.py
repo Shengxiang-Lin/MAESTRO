@@ -1,8 +1,9 @@
 """GPU-isolated launcher for standalone TRL GRPO + vLLM Server Mode.
 
-Use one terminal for `serve` (GPU 0) and another for `train`
-(GPUs 1..train_gpus). The config alone chooses the topology; no
-hand-written device lists or manual torchrun process count required.
+Use one terminal for `serve` (configured rollout_gpu; currently GPU 1)
+and another for `train` (configured contiguous trainer GPUs; currently GPU 0).
+The config alone chooses the topology; no hand-written device lists or
+manual torchrun process count required.
 """
 from __future__ import annotations
 
