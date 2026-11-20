@@ -282,43 +282,33 @@ train_risk() {
 }
 prepare_grpo() {
   if [[ "$STAGE2_TRAINER" == "da" ]]; then
-    need "$STAGE1_DIR/questions/scenes.jsonl"
-    need "$STAGE4_DIR/main_turns.jsonl"
-    if [[ "$DA_REWARD_MODE" != "da" ]]; then
-      need "$REWARD_STATES"
-    fi
-    if [[ "$DA_REWARD_MODE" == "global" ]]; then
-      need "$STAGE4_DIR/private/claim_state_supervision.jsonl"
-    fi
-    if [[ "$SKIP_COMPLETED" == "1" && -s "$DA_DATA/train.parquet" && -f "$DA_DATA/summary.json" ]] &&
-      python - "$DA_DATA/summary.json" "$STAGE1_DIR/questions/scenes.jsonl" "$STAGE4_DIR/main_turns.jsonl" <<'PY'
-import hashlib,json,sys
-from pathlib import Path
-def digest(path):
-    h=hashlib.sha256()
-    with open(path,"rb") as f:
-        for chunk in iter(lambda:f.read(1<<20),b""):
-            h.update(chunk)
-    return h.hexdigest()
-s=json.loads(Path(sys.argv[1]).read_text())
-if (s.get("schema") != "maestro.stage2_da_grpo.v1"
-        or s.get("scenes_sha256") != digest(sys.argv[2])
-        or s.get("turns_sha256") != digest(sys.argv[3])):
-    raise SystemExit(1)
-PY
-    then
-      say "Reusing verified Stage2 DA Parquet: $DA_DATA/train.parquet"
-      return
-    fi
-    say "Stage2 DA export: exact O1 prompts + reward-only expert metadata"
+    need "$DA_UNIFIED_DIR/manifest.json"
+    need "$DA_UNIFIED_DIR/cases.jsonl"
+    need "$DA_UNIFIED_DIR/decisions.jsonl"
+    need "$DA_UNIFIED_DIR/private/decision_labels.jsonl"
     local extra=()
-    [[ "$DA_REVIEWED_ONLY" == "1" ]] && extra+=(--reviewed_only)
-    python -m train_maestro_8b.data.export_da_grpo \
-      --scenes "$STAGE1_DIR/questions/scenes.jsonl" \
-      --turns "$STAGE4_DIR/main_turns.jsonl" \
-      --output_dir "$DA_DATA" --tokenizer "$MODEL" \
-      --max_prompt_tokens "$GRPO_MAX_PROMPT_TOKENS" "${extra[@]}"
+    [[ "$DA_INCLUDE_FALLBACK" == "1" ]] && extra+=(--include-fallback)
+    [[ -n "$DA_SPLIT_MAP" ]] && extra+=(--split-map "$DA_SPLIT_MAP")
+    if [[ "$SKIP_COMPLETED" == "1" ]]; then
+      extra+=(--reuse-if-unchanged)
+    else
+      extra+=(--overwrite)
+    fi
+    say "Stage2 GRPO: canonical Environment dataset -> Scene-split method Parquet"
+    python -m train_maestro_8b.data.prepare_grpo \
+      --source-dir "$DA_UNIFIED_DIR" \
+      --output-dir "$DA_DATA" \
+      --reward-mode "$DA_REWARD_MODE" \
+      --seed "$DA_SPLIT_SEED" \
+      --scenes-file "$STAGE1_DIR/questions/scenes.jsonl" \
+      --stage4-manifest "$STAGE4_DIR/manifest.json" \
+      --claim-states "$STAGE4_DIR/private/claim_state_supervision.jsonl" \
+      --tokenizer "$MODEL" \
+      --max-prompt-tokens "$GRPO_MAX_PROMPT_TOKENS" \
+      "${extra[@]}"
     need "$DA_DATA/train.parquet"
+    need "$DA_DATA/val.parquet"
+    need "$DA_DATA/test.parquet"
     return
   fi
   [[ "$STAGE2_TRAINER" == "riskkv" ]] || die "STAGE2_TRAINER must be da or riskkv"
