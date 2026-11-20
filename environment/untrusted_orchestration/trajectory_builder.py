@@ -30,7 +30,7 @@ from environment.untrusted_orchestration.runtime.event_scheduler import EventSch
 from .state_machine import (
     ExecutionState, deterministic_report, public_history_item,
 )
-from .reporting.report_author import naturalize_report
+from .reporting.author import naturalize_report
 from environment.untrusted_orchestration.runtime.evidence_planning import schedule_evidence_requests
 from .scenario.history_conflicts import expose_executed_prior_record
 from .scenario.same_source_recheck import (
@@ -320,7 +320,7 @@ def _replay_observed_prefix(
         # an earlier report has changed. Reject intermediate instructions
         # that explicitly name clean-only source values which no public
         # report or original question has supplied at that point.
-        from .reporting.result_text import delivered_records
+        from .reporting.surface import delivered_records
 
         def visible_values(report):
             finish = (report.get("finish_result") or {})

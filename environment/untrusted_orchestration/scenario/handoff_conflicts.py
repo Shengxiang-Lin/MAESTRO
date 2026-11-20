@@ -10,7 +10,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from environment.untrusted_orchestration.runtime.faults import relation_rows, run_attempt
-from ..reporting.result_text import delivered_records, render_records
+from ..reporting.surface import delivered_records, render_records
 
 
 FAULTS = {"wrong_retrieval", "wrong_entity_binding", "fabricated_claim",

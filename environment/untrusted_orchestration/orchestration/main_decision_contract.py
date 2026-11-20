@@ -30,7 +30,7 @@ def _field_values(text: str, field: str) -> set[str]:
     if not isinstance(text, str):
         return set()
     try:
-        from environment.untrusted_orchestration.reporting.result_text import delivered_records
+        from environment.untrusted_orchestration.reporting.surface import delivered_records
         rows = delivered_records(text)
         if isinstance(rows, dict):
             rows = [rows]

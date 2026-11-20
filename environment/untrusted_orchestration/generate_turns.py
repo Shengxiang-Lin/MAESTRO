@@ -127,7 +127,7 @@ def _hash_file(path: Path) -> str:
 def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
     directory = Path(__file__).resolve().parent
     code_files = (
-        "runtime/faults.py", "runtime/atomic_faults.py", "reporting/report_faults.py",
+        "runtime/faults.py", "runtime/atomic_faults.py", "reporting/faults.py",
         "runtime/event_scheduler.py",
         "scenario/scenario_generator.py", "scenario/round_sampling.py",
         "scenario/candidate_exploration.py",
@@ -136,7 +136,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "inspection/visible_history.py", "inspection/visible_claim_state.py",
         "inspection/visible_claim_extraction.py",
         "orchestration/main_decision_contract.py",
-        "reporting/report_contract.py", "reporting/report_evidence.py", "reporting/result_text.py",
+        "reporting/contract.py", "reporting/surface.py",
         "scenario/history_conflicts.py",
         "scenario/prior_observation.py",
         "scenario/handoff_conflicts.py",
@@ -145,10 +145,10 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "runtime/evidence_planning.py",
         "rewards/decision_reward_state.py",
         "rewards/orchestration_reward.py",
-        "reporting/report_validation.py", "reporting/public_language.py",
-        "reporting/public_work.py",
+        "reporting/validation.py",
+        "reporting/work_evidence.py",
         "inspection/publication_guard.py",
-        "state_machine.py", "reporting/report_author.py",
+        "state_machine.py", "reporting/author.py",
         "trusted_prefix.py",
         "trajectory_builder.py", "generate_turns.py",
         "offline_pipeline.py", "decision_reward_replay.py",
@@ -366,7 +366,7 @@ def _published_result_formats(episodes: list[dict]) -> dict:
                         decoded = json.loads(value)
                     except (ValueError, TypeError):
                         decoded = None
-                    from .reporting.result_text import parse_records
+                    from .reporting.surface import parse_records
                     if parse_records(value) is not None:
                         label = "cited_record_prose_v1"
                     elif (isinstance(decoded, list)
@@ -866,9 +866,6 @@ def _publish(output: Path, planned: list[dict],
                               "incorrect_result_after_actual_propagation",
                               "not_selected_for_language_review",
                           }),
-        "screened_out_before_llm": counters[
-            "not_selected_for_language_review"
-        ],
         "skipped_or_rejected": (
             counters["skipped_unsupported"] +
             counters["rejected_validation"]
@@ -877,8 +874,6 @@ def _publish(output: Path, planned: list[dict],
         "published_result_format_by_phase": _published_result_formats(episodes),
         "paired_trajectory_index_rows": len(paired_trajectories),
         "main_training_turns": len(positive_turns),
-        "reviewed_branches": counters["recovered"],
-        "reviewed_turns": len(positive_turns),
         "decision_reward_states": len(decision_reward_states),
         "decision_reward_missing": decision_reward_missing,
         "decision_reward_replay_failures": sum(
@@ -945,7 +940,6 @@ def _publish(output: Path, planned: list[dict],
         "publication_generation_process_leaks": len(
             publication_guard_rows
         ),
-        "publication_surface_leaks": len(publication_guard_rows),
         "language_exceptions_with_retained_audit":
             retained_language_exceptions,
         "wrong_visibility_by_explicit_verify": dict(wrong_visibility_counts),
@@ -1832,8 +1826,8 @@ def generate_turns(
                 backfilled_groups.add(key)
         active = next_active
 
-    # Retain compatibility with the V10 full candidate journal while keeping
-    # all rejected/unused candidates private and LLM-free.
+    # Preserve one journal slot per 4A candidate for resumable alignment,
+    # while keeping skipped candidates private and LLM-free.
     for plan in planned:
         if plan["index"] in attempted:
             continue
@@ -1887,6 +1881,11 @@ def generate_turns(
         selection_rows,
     )
     counts_summary = _publish(output, planned, base)
+    processed_actions = sum(
+        len(((saved(journal, by_index[i]) or {}).get("private_audit")
+             or {}).get("main_action_reviews", []))
+        for i in attempted
+    )
     summary = {
         # "status" describes whether all requested round units were
         # processed. Training-label acceptance is a separate measurement:
@@ -1915,9 +1914,6 @@ def generate_turns(
             max_language_attempts_per_round,
         "candidate_selection_diagnostics": str(
             output / "private" / "candidate_selection.jsonl"
-        ),
-        "candidate_backfill_diversity": (
-            "causal_recovery_rank_distinct_behavior"
         ),
         "evidence_affordance_diagnostics": str(
             output / "private" / "scene_evidence_affordances.jsonl"
@@ -1968,17 +1964,9 @@ def generate_turns(
             max(0, target_main_turns - counts_summary["main_training_turns"])
             if target_main_turns is not None else None
         ),
-        "main_actions_processed": sum(
-            len(((saved(journal, by_index[i]) or {}).get("private_audit")
-                 or {}).get("main_action_reviews", []))
-            for i in attempted
-        ),
-        "main_actions_skipped_downstream": max(0,
-            total_actions - sum(
-                len(((saved(journal, by_index[i]) or {}).get("private_audit")
-                     or {}).get("main_action_reviews", []))
-                for i in attempted
-            )
+        "main_actions_processed": processed_actions,
+        "main_actions_skipped_downstream": max(
+            0, total_actions - processed_actions
         ),
         "input_scenes": len(scenes),
         "trusted_prefixes_compiled": len(base),
@@ -2018,8 +2006,6 @@ def generate_turns(
             output / "feedback_round_index.jsonl"
         ),
         "scenes_without_eligible_fault": no_eligible,
-        "requested_branches": len(planned),
-        "requested_feedback_rounds": base_feedback_round_count,
         **counts_summary,
         "stage4a_evidence_plans": str(output / "stage4a" / "journal"),
         "stage4b_reviewed_reports": str(output / "stage4b" / "journal"),
@@ -2028,38 +2014,17 @@ def generate_turns(
         "private_fault_alignment": str(
             output / "private" / "fault_alignment.jsonl"
         ),
-        "limitations": [
-            "Candidate enumeration and ranking are deterministic 4A-only; successful candidates are author-reviewed in ranked order only if earlier reviewed candidates fail, within a per-round budget.",
-            "The default 4A search only retries the frozen executable Macro path; new independent verification operators are not yet synthesized.",
-            "One atomic fault per candidate is sufficient to expose several multi-round outcomes; trial count is not the number of distinct questions.",
-            "Every accepted base Main decision round receiving a prior Sub-Agent batch is indexed; only an explicit debug cap limits extraction.",
-            "Feedback rounds after the configured max_rounds budget are indexed but transparently skipped, never silently omitted.",
-            "The initial fault injection window is the latest completed Sub-Agent batch. Optional event-scheduled future atoms are separately audited.",
-            "Only preflight-executable fault/macro pairs are sampled.",
-            "Only publicly observable discrepancies trigger targeted repair labels.",
-            "Clean World/Gold never change; uncorrected counterfactuals are private, not reviewed turns.",
-            "Stage 4A determines evidence requests and an executable global schedule using only Main-visible report justifications.", 
-            "4B materializes every actual executed Sub-Agent Attempt before any Stage 4C Main LLM is called.",
-            "4C naturalizes 4A's fixed legal scheduling contracts against the finalized Main-visible 4B history.",
-            "Template actions are deterministic teacher demonstrations, not online Main-Agent rollouts.",
-            "Sub-Agent Author/Critic write full prose for this attempt; status and actual WorkProduct remain code-owned.",
-            "Main-Agent Author/Critic only naturalize the program-selected O1 tasks; private state does not enter their prompt.",
-            "LLM-mode fallback reports are diagnostic only, never silently counted as reviewed positive turns.",
-            "4C action task_instruction and context are fixed against the current 4A/4B executable evidence contract; LLM edits only decision reasoning.",
-            "Per-turn local eligibility is diagnostic in private/main_turns_local_review.jsonl; it is never silently merged into globally verified reviewed turns.",
-            "Claim–Source–Dependency supervision is private and derived from actually returned report text only; unknown text remains unknown and no future Gold is materialized.",
-        ],
     }
     _atomic_json(output / "summary.json", summary)
     if not no_progress:
         tqdm.write(
             "Evidence candidate trials: "
             f"{summary['completed_branches']}/{summary['candidate_trials']} "
-            f"| feedback rounds={summary['requested_feedback_rounds']} "
+            f"| feedback rounds={summary['rounds_extracted_from_base']} "
             f"| selected={summary['candidates_selected_for_language_review']} "
             f"| execution recovered={summary['execution_recovered_branches']} "
             f"| incorrect={summary['incorrect']} "
             f"| reviewed branches={summary['reviewed_branches']} "
-            f"| reviewed turns={summary['reviewed_turns']}"
+            f"| reviewed turns={summary['main_training_turns']}"
         )
     return summary
