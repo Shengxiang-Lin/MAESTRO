@@ -127,6 +127,7 @@ class PublicVerificationFocusTests(unittest.TestCase):
             [{"entity_final": "PRJ-A", "metric_count": 20}],
             "The summary records metric count = " + ("21" if disputed else "20") + ".",
         )}
+        state.public_report_rounds = {"M1": 1}
         state.cross_source_checks_enabled = False
         state._public_conflict_cache = None
         state.detected_conflicts = []
