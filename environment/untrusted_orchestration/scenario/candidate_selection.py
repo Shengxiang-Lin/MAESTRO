@@ -283,6 +283,26 @@ def classify_trial(plan: dict, journal: dict) -> dict:
     }
 
 
+_ANSWER_IMPACT_PRIORITY = {
+    "answer_changing": 0,
+    "completion_blocked": 1,
+    "consistency_only": 2,
+    "not_evaluated": 3,
+}
+
+
+def candidate_quality_key(row: dict) -> tuple:
+    """Stable, reviewer-independent ordering for primary AND reserve cases."""
+    return (
+        _ANSWER_IMPACT_PRIORITY.get(row["answer_impact"], 3),
+        -bool(row["actual_invalidations"]),
+        -bool(row["history_conflicts_detected"]),
+        -len(row["history_conflict_round_gaps"]),
+        -row["visible_conflicts"],
+        _PRIORITY.get(row["category"], 99),
+    )
+
+
 def select_recovered_candidates(
     planned: list[dict], journals: list[dict], *,
     max_selected_per_round: int | None,
@@ -338,10 +358,14 @@ def select_recovered_candidates(
             row for row in groups[key]
             if row["execution_outcome"] == "recovered"
         ]
-        if strategy in {"stratified", "global_balanced"}:
+        if strategy == "global_balanced":
             eligible.sort(key=lambda row: (
-                # Scarce, successfully recovered historical disagreements
-                # outrank routine missing/partial report recoveries.
+                candidate_quality_key(row),
+                category_usage[row["category"]],
+                tie(row),
+            ))
+        elif strategy == "stratified":
+            eligible.sort(key=lambda row: (
                 -bool(row["history_conflicts_detected"]),
                 -len(row["history_conflict_older_rounds"]),
                 category_usage[row["category"]],
@@ -380,43 +404,65 @@ def select_recovered_candidates(
         rows[i]["atom_kind"] for i in selected
     )
     if target_main_turns is not None:
-        from collections import deque
         candidates = defaultdict(list)
         for i in selected:
             candidates[rows[i]["atom_kind"]].append(rows[i])
-        # Prefer rare recovery EFFECTS and policies within each kind.
+        # A global turn cap is a MAXIMUM, never a demand to manufacture
+        # cheap consistency-only labels. First cover answer-changing and
+        # blocked cases, then only behaviorally distinct consistency repairs.
         for kind, choices in candidates.items():
             effects = Counter(row["recovery_effect"] for row in choices)
             policies = Counter(row["policy_signature"] for row in choices)
             choices.sort(key=lambda row: (
-                row.get("answer_impact") == "consistency_only",
+                candidate_quality_key(row),
                 effects[row["recovery_effect"]],
                 policies[row["policy_signature"]],
-                -row["actual_invalidations"],
-                -len(row["history_conflict_round_gaps"]),
                 tie(row),
             ))
-        queues = {kind: deque(items) for kind, items in candidates.items()}
-        chosen = set()
-        spent = Counter()
+        chosen, spent = set(), Counter()
         remaining = target_main_turns
+        consistency_signatures = set()
         while remaining > 0:
             feasible = []
-            for kind, queue in queues.items():
-                # Skip large Episodes only when the remaining capacity
-                # cannot fit them. They remain private 4A alternatives.
-                while queue and queue[0]["decision_rounds_post_fork"] > remaining:
-                    queue.popleft()
-                if queue:
-                    feasible.append(kind)
+            for kind, queue in candidates.items():
+                for offset, row in enumerate(queue):
+                    turns = row["decision_rounds_post_fork"]
+                    if not 0 < turns <= remaining:
+                        continue
+                    # Old audited fixtures may lack an unrepaired label:
+                    # rank these last, never invent an outcome.
+                    # Ordinary consistency-only repairs are useful once per
+                    # distinct abstract policy/fault/effect. Late conflict
+                    # or real invalidation examples remain valuable even
+                    # when the abstract policy has appeared before.
+                    signature = (
+                        kind, row["policy_signature"],
+                        row["recovery_effect"],
+                    )
+                    if (row["answer_impact"] == "consistency_only"
+                            and not row["actual_invalidations"]
+                            and not row["history_conflicts_detected"]
+                            and signature in consistency_signatures):
+                        continue
+                    feasible.append((kind, offset, row))
+                    break
             if not feasible:
                 break
-            kind = min(feasible, key=lambda name: (spent[name], name))
-            pick = queues[kind].popleft()
+            kind, offset, pick = min(feasible, key=lambda item: (
+                candidate_quality_key(item[2]),
+                spent[item[0]],
+                item[0],
+                tie(item[2]),
+            ))
+            candidates[kind].pop(offset)
             chosen.add(pick["candidate_index"])
             turns = pick["decision_rounds_post_fork"]
             remaining -= turns
             spent[kind] += turns
+            if pick["answer_impact"] == "consistency_only":
+                consistency_signatures.add((
+                    kind, pick["policy_signature"], pick["recovery_effect"],
+                ))
         for index in selected - chosen:
             rows[index]["selection_purpose"] = "budget_reserve"
         selected = chosen

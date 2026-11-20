@@ -256,6 +256,48 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
             for case in ids:
                 add(case, "identifier_present", True, "result")
 
+    # Stage-4 report-only faults now explicitly name the *public* record
+    # slot they describe. Resolve Record N through delivered Result rows,
+    # without consulting the executor or guessing a cross-row association.
+    if isinstance(summary, str) and isinstance(result, str):
+        from environment.untrusted_orchestration.reporting.surface import delivered_records
+        delivered = delivered_records(result)
+        if isinstance(delivered, list):
+            for match in re.finditer(
+                r"\bRecord\s+(\d+)\s*:\s*"
+                r"([A-Za-z][A-Za-z0-9_ ]*?)\s*=\s*",
+                summary, flags=re.I,
+            ):
+                index = int(match.group(1)) - 1
+                field = match.group(2).strip().replace(" ", "_")
+                if not 0 <= index < len(delivered) or field not in declared:
+                    continue
+                row = delivered[index]
+                values = row.get("values", {}) if isinstance(row, dict) else {}
+                if not isinstance(values, dict) or field not in values:
+                    continue
+                fragment = summary[match.end():].lstrip()
+                try:
+                    parsed, end = json.JSONDecoder().raw_decode(fragment)
+                except (ValueError, TypeError):
+                    continue
+                if type(parsed) not in _SCALAR:
+                    continue
+                suffix = fragment[end:]
+                if suffix and not (suffix[0].isspace() or
+                                   re.match(r"^[;,.!?](?:\s|$)", suffix)):
+                    continue
+                subject_field = next((
+                    key for key in SUBJECT_FIELDS
+                    if isinstance(values.get(key), str) and values[key].strip()
+                ), None)
+                subject = (values[subject_field] if subject_field else
+                           "source:" + source_id if source_id else None)
+                if subject is not None:
+                    add(subject, field, parsed, "summary",
+                        row.get("source_fact_refs", []))
+                    modes.add("explicit_record_scoped_summary")
+
     for surface, prose in (("result", result), ("summary", summary)):
         if not isinstance(prose, str):
             continue

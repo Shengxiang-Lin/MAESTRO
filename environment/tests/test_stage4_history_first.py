@@ -897,19 +897,30 @@ class HistoryFirstHandoffTests(unittest.TestCase):
             "child", branch_audit["delayed_causal_audit"][
                 "pre_discovery_consumers"],
         )
-        # A plan that still uses the clean-only name after the early fault
-        # is *not* an acceptable delayed training history.
+        # The old Stage-3 dispatch is now rebuilt from actually returned
+        # faulty evidence rather than rejected or copied with clean keys.
         leaked_base = deepcopy(augmented_base)
         leaked_base["trajectory"][1]["params"]["tasks"][0][
             "task_instruction"] = "Inspect Lakehurst District by name."
-        with self.assertRaisesRegex(
-            ValueError, "delayed_prefix_dispatch_references_unseen_clean_value",
-        ):
-            _replay_observed_prefix(
-                augmented_scene, {}, leaked_base,
-                branch_round=4, faults=[fault],
-                fault_origin_wave_index=0,
-            )
+        leaked_base["trajectory"][1]["params"]["tasks"][0][
+            "context"] = "Lakehurst District was already identified."
+        leaked_base["trajectory"][1][
+            "reasoning"] = "The confirmed project is Lakehurst District."
+        _state, _history, rewritten, _log = _replay_observed_prefix(
+            augmented_scene, {}, leaked_base,
+            branch_round=4, faults=[fault],
+            fault_origin_wave_index=0,
+        )
+        historical = rewritten[1]
+        self.assertNotIn("Lakehurst District", str(historical["params"]))
+        self.assertNotIn("Lakehurst District", historical["reasoning"])
+        self.assertEqual(
+            historical["params"]["tasks"][0]["task_instruction"],
+            historical["result"]["subtask_results"][0]["task_instruction"],
+        )
+        self.assertIn(
+            "Dunhaven District", historical["params"]["tasks"][0]["context"],
+        )
 
     def test_delayed_fault_candidate_keeps_old_dependency_edges(self):
         """Fault only the old task; a clean new witness is genuinely delegated."""

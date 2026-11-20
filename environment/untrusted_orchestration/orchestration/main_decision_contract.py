@@ -101,6 +101,9 @@ def build_main_decision_contract(history: list[dict], goals: list[dict],
         if m:
             fields.add(_normalize_field(m.group(1)))
     conflicts, gaps = [], []
+    from environment.untrusted_orchestration.inspection.claim_comparison import (
+        report_claim_conflicts,
+    )
     for position, report in enumerate(recent):
         if not isinstance(report, dict):
             continue
@@ -111,22 +114,11 @@ def build_main_decision_contract(history: list[dict], goals: list[dict],
         status = finish.get("status", "done")
         if status in {"partial", "missing", "stale"}:
             gaps.append({"report_index": position, "status": status})
-        for field in sorted(fields):
-            result_values = _field_values(finish.get("result"), field)
-            summary_values = _field_values(finish.get("summary"), field)
-            # Summary may accurately cite only a subset of the Result.
-            # An absent value is a genuine *observable* discrepancy.
-            unsupported = summary_values - result_values
-            if not result_values or not unsupported:
-                continue
+        for finding in report_claim_conflicts(report, allowed_fields=fields):
             conflicts.append({
-                "field": field,
-                "result_value": ", ".join(sorted(result_values)[:8]),
-                "summary_value": ", ".join(sorted(unsupported)[:4]),
+                **finding,
                 "report_index": position,
                 "observed_round": latest,
-                "basis": "same visible Sub-Agent Result and Summary",
-                "state": "unverified",
             })
     return {
         "contract_version": "v10_4_3",

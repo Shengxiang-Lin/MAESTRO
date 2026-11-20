@@ -99,8 +99,10 @@ def render_report_fault(base: dict, attempt) -> tuple[dict, dict]:
             "status": "done",
             "result": render_records(rows),
             "summary": (
-                "The summary records " + field.replace("_", " ")
-                + " = " + str(replacement) + " for the returned record."
+                "The summary records Record " + str(row_index + 1)
+                + ": " + field.replace("_", " ")
+                + " = " + json.dumps(replacement, ensure_ascii=False)
+                + ". This is the reported value for that specific record."
             ),
         }
     report["trace_summary"] = (

@@ -293,6 +293,51 @@ an online trained Main-Agent policy result. For language-based SFT,
 and fallback remain private diagnostics; they cannot be promoted
 through a successful deterministic outcome.
 
+## Causal-history and language-quality gates
+
+Stage 4A now rebuilds historical Main assignment prose **after the actual
+injection wave** when replaying an earlier consumed fault. The original
+trusted Stage-3 reference and legal Macro/tool/model dispatch remain frozen.
+Instructions, handoff contexts, and reasoning in affected historical waves
+are reconstructed from the reports Main had already received; the matching
+Sub-Agent report displays the rebuilt instruction. A correctly replayed
+WorkProduct alone is not enough to justify copying a clean Main instruction.
+No future/Gold value may be used to repair the public prefix.
+
+Internal Result/Summary conflicts use the common
+`inspection/claim_comparison.py` comparator in both runtime and Main
+review. It preserves numeric precision and boolean types, compares explicit
+claims only within the same object/field/scope, and abstains on ambiguous
+multi-row value associations. An explicitly claimed **missing identifier**
+in a complete returned identifier set remains observable. Report-only
+injections identify the claimed row (Record N), rather than injecting an
+unscoped value and treating it as a contradiction. Clean Result/Summary
+controls must produce no conflict.
+
+For `selection_strategy: global_balanced`, the Main-turn budget is an
+upper bound, **not a target to fill at any quality**. Select
+answer-changing and completion-blocking cases before ordinary
+consistency-only cases; redundant consistency repairs with the same
+fault/policy/effect signature stay private budget reserves unless they
+contain real historical contradictions or downstream invalidation. Under a
+bounded budget, a failed candidate may be replaced only by a case with the
+same fault kind, no weaker answer impact and no loss of an already-required
+history-conflict or invalidation signal. Missing coverage remains an
+explicit shortfall, never a fabricated positive.
+
+The final `summary.json` reports
+`published_answer_impact_distribution`,
+`published_recovery_effect_distribution`, `published_by_fault_kind`,
+and `unfilled_main_turn_budget` alongside actual published
+`main_training_turns`. Main reasoning guards accept explicit grounded
+recomputation as verification motivation and reject unambiguous
+source/field/value claims that contradict cited, already returned
+single-source public records; unknown provenance abstains.
+
+A new run must use a **fresh output directory**, since Stage 4 signatures
+now include the claim comparison logic. Older datasets are preserved for
+regression and are not retroactively declared clean.
+
 ## Implementation checks
 
 Run the environment unit tests and small paired Stage 2–4 smoke
