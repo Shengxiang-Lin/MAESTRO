@@ -53,6 +53,17 @@ class ReportClaimComparisonTests(unittest.TestCase):
         result["finish_result"]["summary"] = "Case-002: score = 8."
         self.assertEqual(report_claim_conflicts(result), [])
 
+    def test_complete_identifier_set_excludes_claimed_missing_id(self):
+        handoff = report(
+            [{"entry_label": "Entry-01"}, {"entry_label": "Entry-03"}],
+            "The summary records entry label = Entry-07.",
+        )
+        self.assertEqual(len(report_claim_conflicts(handoff)), 1)
+        handoff["finish_result"]["summary"] = (
+            "The summary records entry label = Entry-03."
+        )
+        self.assertEqual(report_claim_conflicts(handoff), [])
+
     def test_critic_and_runtime_share_identical_public_witness(self):
         handoff = report([{"latitude_a": 46.653836}],
                          "summary records latitude a = 46.123456.")
@@ -79,6 +90,41 @@ class ReportClaimComparisonTests(unittest.TestCase):
         self.assertEqual(
             contract_clean["visible_evidence"]["confirmed_result_summary_conflicts"], [],
         )
+
+
+class ReasoningGroundingTests(unittest.TestCase):
+    def test_recompute_is_a_valid_verification_motivation(self):
+        from environment.untrusted_orchestration.orchestration.reasoning_fidelity import (
+            reasoning_evidence_issues,
+        )
+        goal = [{"operation": "verify_conflicting_evidence"}]
+        self.assertEqual(reasoning_evidence_issues(
+            "The prior computation returned 0.25. I will recompute "
+            "319 divided by 80 using the reported inputs.",
+            goal,
+        ), [])
+
+    def test_explicit_source_field_value_cannot_be_misattributed(self):
+        from environment.untrusted_orchestration.orchestration.reasoning_fidelity import (
+            reasoning_source_attribution_issues,
+        )
+        history = [{"attempt": 1, "subtask_results": [{
+            "status": "done",
+            "result": render_records([{
+                "values": {"count": 80},
+                "source_fact_refs": ["official:F001"],
+            }]),
+            "summary": "Returned the confirmed count.",
+        }]}]
+        self.assertEqual(reasoning_source_attribution_issues(
+            "Source official reports count = 80.", history,
+        ), [])
+        self.assertEqual(reasoning_source_attribution_issues(
+            "Source official reports count = 319.", history,
+        ), ["reasoning_misattributed_source_value:official:count"])
+        self.assertEqual(reasoning_source_attribution_issues(
+            "The two counts should be cross-checked.", history,
+        ), [])
 
 
 class QualitySelectionTests(unittest.TestCase):
