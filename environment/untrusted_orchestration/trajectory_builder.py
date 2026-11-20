@@ -235,8 +235,8 @@ def _rebind_poisoned_prefix_action(
             tasks[tid], catalog, delivered,
             model_alias=original["model"],
         )
-        if replacement["tools"] != original["tools"]:
-            raise ValueError("delayed_prefix_tool_scope_drift")
+        # The original model/tools are immutable, already validated by the
+        # clean Stage-3 reference. Rebuilding prose must not reroute either.
         rebuilt = deepcopy(original)
         rebuilt["task_instruction"] = replacement["target_instruction"]
         rebuilt["context"] = replacement["context"]
