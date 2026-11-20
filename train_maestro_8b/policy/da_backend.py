@@ -26,6 +26,21 @@ def build_stage2_config(args):
     cfg["paths"]["model"] = Path(args.model).expanduser().resolve()
     cfg["paths"]["train_parquet"] = Path(args.train_file).expanduser().resolve()
     cfg["paths"]["output_dir"] = Path(args.output_dir).expanduser().resolve()
+    # Bind reward-only context to the SAME frozen unified-derived train data.
+    private = cfg["paths"]["train_parquet"].parent / "private"
+    for name, filename in (
+        ("scenes_file", "scenes.jsonl"),
+        ("claim_states", "claim_state_supervision.jsonl"),
+        ("decision_states", "decision_reward_states.jsonl"),
+    ):
+        frozen = private / filename
+        requested = getattr(args, name, None)
+        if requested and Path(requested).expanduser().resolve() != frozen:
+            raise ValueError(
+                f"{name} must use prepared unified private evidence: {frozen}; "
+                "do not mix an external Stage1/Stage4 file into Global Judge."
+            )
+        setattr(args, name, str(frozen))
     cfg["training"]["epochs"] = args.epochs
     cfg["training"]["max_steps"] = args.max_steps
     cfg["training"]["learning_rate"] = args.lr
@@ -290,6 +305,8 @@ def run(args):
               " decision_states=" + str(args.decision_states))
         return
     checks = runtime.environment_checks(cfg)
+    if args.reward_mode == "global" and not args.dry_run and not args.test_judge:
+        runtime.verify_prepared_global_context(cfg["paths"]["train_parquet"])
     if args.check:
         runtime.show_config(cfg)
         if not all(checks.values()):
@@ -406,12 +423,11 @@ def main(argv=None):
                    choices=("global", "hybrid", "deterministic", "judge_only", "da"),
                    default="global",
                    help="global=full evidence+recovery LLM Judge; hybrid=old strict local gate")
-    p.add_argument("--scenes_file",
-                   default="environment/data/stage1/questions/scenes.jsonl")
-    p.add_argument("--claim_states",
-                   default="environment/data/stage4/private/claim_state_supervision.jsonl")
-    p.add_argument("--decision_states",
-                   default="workspace/maestro_8b/stage2_da/private/decision_reward_states.jsonl",
+    p.add_argument("--scenes_file", default=None,
+                   help="Prepared private Scene path, inferred from train_file")
+    p.add_argument("--claim_states", default=None,
+                   help="Prepared claim snapshot path, inferred from train_file")
+    p.add_argument("--decision_states", default=None,
                    help="Local private pre-action state sidecar, never sent to policy/Judge")
     p.add_argument("--judge_weight", type=float, default=0.4)
     p.add_argument("--judge_timeout", type=float, default=90.0)

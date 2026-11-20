@@ -303,6 +303,27 @@ def load_dataset_rows(path: Path) -> list[dict]:
     return result
 
 
+def verify_prepared_global_context(train_parquet: Path) -> dict:
+    """Fail closed if prepared evaluator sidecars were replaced after conversion."""
+    base = Path(train_parquet).parent
+    path = base / "summary.json"
+    if not path.is_file():
+        raise FileNotFoundError("Missing prepared GRPO summary: " + str(path))
+    summary = json.loads(path.read_text(encoding="utf-8"))
+    if summary.get("reward_mode") != "global":
+        raise ValueError("Prepared GRPO reward mode is not global")
+    expected = summary.get("private_context_file_sha256")
+    if not isinstance(expected, dict) or set(expected) != {
+        "private/scenes.jsonl", "private/claim_state_supervision.jsonl"
+    }:
+        raise ValueError("Prepared GRPO missing frozen Global Judge evidence hashes")
+    from environment.data_export.source_io import digest
+    for name, recorded in expected.items():
+        current = base / name
+        if not current.is_file() or digest(current) != recorded:
+            raise ValueError("Prepared Global Judge evidence checksum mismatch: " + name)
+    return expected
+
 def check_prompt_lengths(rows: list[dict], tokenizer: Any, limit: int) -> None:
     # Fail instead of silently truncating evidence or Sub-Agent history.
     from dataset.tokenization import extract_token_ids

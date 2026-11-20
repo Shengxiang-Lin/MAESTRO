@@ -49,6 +49,17 @@ class Stage2DABackend(unittest.TestCase):
         self.assertTrue(str(cfg["paths"]["train_parquet"]).endswith("stage2_da/train.parquet"))
         self.assertFalse(cfg["model"]["load_in_4bit"])
 
+    def test_global_judge_paths_are_pinned_to_prepared_private_context(self):
+        args = self.args()
+        build_stage2_config(args)
+        private = Path(args.train_file).expanduser().resolve().parent / "private"
+        self.assertEqual(Path(args.scenes_file), private / "scenes.jsonl")
+        self.assertEqual(Path(args.claim_states), private / "claim_state_supervision.jsonl")
+        self.assertEqual(Path(args.decision_states), private / "decision_reward_states.jsonl")
+        args = self.args()
+        args.scenes_file = "environment/data/stage1/questions/scenes.jsonl"
+        with self.assertRaisesRegex(ValueError, "do not mix"):
+            build_stage2_config(args)
     def test_reject_context_overflow(self):
         args = self.args()
         args.max_new_tokens = 4096

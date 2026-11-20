@@ -144,7 +144,10 @@ class Stage2CanonicalPreparationTests(unittest.TestCase):
                     {"schema": "maestro.dataset.v1",
                      "base_file_sha256": {"decisions.jsonl": "fake"}},
                 ),
-            ), patch("train_maestro_8b.data.prepare_grpo.assert_global_sources"):
+            ), patch("train_maestro_8b.data.prepare_grpo.verify_private_context",
+                     return_value={"file_sha256": {}}), patch(
+                "train_maestro_8b.data.prepare_grpo.validate_selected_claims"
+            ):
                 summary = prepare(
                     source_dir=source, output_dir=output,
                     reward_mode="global", dry_run=True,
@@ -192,40 +195,56 @@ class Stage2CanonicalPreparationTests(unittest.TestCase):
                     "".join(json.dumps(item) + "\n" for item in items),
                     encoding="utf-8",
                 )
-            scene_path = root / "scenes.jsonl"
-            scene_path.write_text('{"version":"test"}\n', encoding="utf-8")
-            stage4_manifest = root / "stage4_manifest.json"
-            stage4_manifest.write_text('{"version":"test"}\n', encoding="utf-8")
-            claim_states = root / "claim_states.jsonl"
-            claim_states.write_text("", encoding="utf-8")
+            from environment.data_export.private_context import publish_private_context
+            claim_path = root / "stage4_claims.jsonl"
+            claim_records = [{
+                "schema": "claim_source_dependency",
+                "private_only": True,
+                "task_id": row["scene_id"],
+                "round_sample_id": row["case_id"],
+                "main_can_act_from_round": row["decision_round"],
+                "claim_nodes": [],
+                "claim_states": {},
+            } for row in decisions]
+            claim_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in claim_records),
+                encoding="utf-8",
+            )
             source_manifest = {
                 "schema": "maestro.dataset.v1",
                 "base_file_sha256": {
                     name: digest(base / name)
-                    for name in (
-                        "cases.jsonl", "decisions.jsonl",
-                        "private/decision_labels.jsonl",
-                    )
-                },
-                "source_sha256": {
-                    "scenes": digest(scene_path),
-                    "stage4_manifest": digest(stage4_manifest),
+                    for name in ("cases.jsonl", "decisions.jsonl",
+                                 "private/decision_labels.jsonl")
                 },
             }
+            world = {
+                name: {
+                    "task_id": name, "question": "Question",
+                    "macro_graph": {"tasks": [{"task_id": "A", "depends_on": []}]},
+                    "world": {"sources": {}},
+                }
+                for name in scenes
+            }
+            publish_private_context(
+                base, scenes=world, decisions=decisions,
+                claim_path=claim_path, manifest=source_manifest,
+            )
             (base / "manifest.json").write_text(
                 json.dumps(source_manifest), encoding="utf-8",
             )
+            # Neither source Stage1 nor Stage4 files are needed after export.
+            claim_path.unlink()
             output = root / "prepared"
-            arguments = {
-                "source_dir": base, "output_dir": output,
-                "reward_mode": "global",
-                "scenes_file": scene_path,
-                "stage4_manifest": stage4_manifest,
-                "claim_states": claim_states,
-            }
+            arguments = {"source_dir": base, "output_dir": output,
+                         "reward_mode": "global"}
             summary = prepare(**arguments)
             self.assertEqual(sum(summary["counts"].values()), 4)
             self.assertEqual(summary["private_state_rows"], 4)
+            self.assertTrue((output / "private/scenes.jsonl").is_file())
+            self.assertTrue((output / "private/claim_state_supervision.jsonl").is_file())
+            self.assertEqual(digest(output / "private/scenes.jsonl"),
+                             source_manifest["private_context"]["file_sha256"]["private/scenes.jsonl"])
             self.assertTrue(all(
                 pq.read_metadata(output / (part + ".parquet")).num_rows ==
                 summary["counts"][part]
@@ -238,9 +257,30 @@ class Stage2CanonicalPreparationTests(unittest.TestCase):
             compatible, report = select_scorable_rows(converted, private)
             self.assertEqual(len(compatible), summary["counts"]["train"])
             self.assertEqual(report["excluded"], {})
+            from train_maestro_8b.policy.grpo_runtime import verify_prepared_global_context
+            self.assertEqual(
+                verify_prepared_global_context(output / "train.parquet"),
+                summary["private_context_file_sha256"],
+            )
+            prepared_world = output / "private/scenes.jsonl"
+            original_world = prepared_world.read_bytes()
+            prepared_world.write_bytes(original_world + b"\n")
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                verify_prepared_global_context(output / "train.parquet")
+            prepared_world.write_bytes(original_world)
             self.assertTrue(prepare(**arguments, reuse_if_unchanged=True)["reused"])
             with self.assertRaisesRegex(FileExistsError, "different recipe"):
                 prepare(**arguments, include_fallback=True)
+            # Changing a frozen private World must fail, even though the
+            # model-visible decision prompts are untouched.
+            with (base / "private/scenes.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write('{"tampered":true}\n')
+            with self.assertRaisesRegex(ValueError, "checksum_changed"):
+                prepare(**arguments, dry_run=True)
+            (base / "private/scenes.jsonl").write_text(
+                (output / "private/scenes.jsonl").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
             with (base / "decisions.jsonl").open("a", encoding="utf-8") as handle:
                 handle.write('{"corrupted":true}\n')
             with self.assertRaisesRegex(ValueError, "checksum"):

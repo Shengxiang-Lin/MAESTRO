@@ -230,6 +230,11 @@ def audit_output(output_dir: Path, *, verify_manifest: bool = False,
         for name, path in files.items():
             _check(digest(path) == manifest["base_file_sha256"].get(name),
                    "base_source_checksum_changed:" + name)
+    if verify_manifest:
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        if "private_context" in manifest:
+            from .private_context import verify_private_context
+            verify_private_context(root, require_complete=False)
     return audit_dataset(
         read_jsonl(files["cases.jsonl"], progress=progress, desc="Read base Cases"),
         read_jsonl(files["decisions.jsonl"], progress=progress, desc="Read base decisions"),
