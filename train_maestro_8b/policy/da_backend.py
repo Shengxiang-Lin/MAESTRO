@@ -71,13 +71,20 @@ def build_stage2_config(args):
     cfg["judge"]["model"] = args.judge_model
     cfg["judge"]["api_key_env"] = args.judge_api_key_env
     cfg["judge"]["registry"] = str(Path(args.judge_registry).expanduser().resolve())
-    if args.judge_model != "qwen3.7-flash" or args.judge_registry != "config/model_config.yaml":
-        import yaml
-        models = yaml.safe_load(Path(cfg["judge"]["registry"]).read_text(encoding="utf-8"))["models"]
-        info = models.get(args.judge_model, {})
-        if info.get("backend") != "api" or info.get("api_type") != "openai":
-            raise ValueError("DA Stage2 Judge must be an OpenAI-compatible API")
-        cfg["judge"]["base_url"] = info["base_url"]
+    # Always resolve the selected Judge from the shared registry. Do not
+    # special-case an old default model: CLI/environment overrides must use
+    # the selected entry's actual endpoint and backend.
+    import yaml
+    models = yaml.safe_load(
+        Path(cfg["judge"]["registry"]).read_text(encoding="utf-8")
+    ).get("models", {})
+    info = models.get(args.judge_model, {})
+    if info.get("backend") != "api" or info.get("api_type") != "openai":
+        raise ValueError(
+            f"DA Stage2 Judge {args.judge_model!r} must be an "
+            "OpenAI-compatible API model in model_config.yaml"
+        )
+    cfg["judge"]["base_url"] = info["base_url"]
     if not cfg["judge"]["base_url"].startswith("https://"):
         raise ValueError("Judge endpoint must use HTTPS")
     if (args.max_length + args.max_new_tokens > cfg["model"]["max_seq_length"]
@@ -416,7 +423,7 @@ def main(argv=None):
     p.add_argument("--save_steps", type=int, default=50)
     p.add_argument("--logging_steps", type=int, default=1)
     p.add_argument("--judge_registry", default="config/model_config.yaml")
-    p.add_argument("--judge_model", default="qwen3.7-flash")
+    p.add_argument("--judge_model", default="deepseek-v4.1-flash-1017")
     p.add_argument("--judge_api_key_env", default="DASHSCOPE_API_KEY")
     p.add_argument("--judge_workers", type=int, default=4)
     p.add_argument("--reward_mode",

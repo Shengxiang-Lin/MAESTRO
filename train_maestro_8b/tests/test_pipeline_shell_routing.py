@@ -62,6 +62,7 @@ class PipelineShellRoutingTests(unittest.TestCase):
                 "TEST_REAL_PYTHON": sys.executable,
                 "PATH": str(bin_dir) + os.pathsep + env.get("PATH", ""),
             })
+            env.pop("GRPO_JUDGE_MODEL", None)
             for action, expected in (
                 ("preflight", "--check"),
                 ("judge", "--test_judge"),
@@ -80,6 +81,7 @@ class PipelineShellRoutingTests(unittest.TestCase):
                     )
                     self.assertIn("FAKE_PYTHON", result.stdout)
                     self.assertIn(expected, result.stdout)
+                    self.assertIn("--judge_model deepseek-v4.1-flash-1017", result.stdout)
                     self.assertNotIn("--micro_batch_size", result.stdout)
                     self.assertNotIn("--gradient_accumulation_steps", result.stdout)
 
@@ -104,6 +106,7 @@ class PipelineShellRoutingTests(unittest.TestCase):
                 "RUN_ROOT": str(base / "run"),
                 "DA_MICRO_BATCH": "2",
                 "DA_GRAD_ACCUM": "16",
+                "GRPO_JUDGE_MODEL": "qwen3.7-flash",
                 "STAGE1_BELIEF_ADAPTER": "/tmp/test-adapter",
                 "PATH": str(bin_dir) + os.pathsep + env.get("PATH", ""),
             })
@@ -112,6 +115,7 @@ class PipelineShellRoutingTests(unittest.TestCase):
                 cwd=ROOT, env=env, text=True, capture_output=True, timeout=20,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("--judge_model qwen3.7-flash", result.stdout)
             self.assertIn("--micro_batch_size 2", result.stdout)
             self.assertIn("--gradient_accumulation_steps 16", result.stdout)
             self.assertIn("--stage1_belief_adapter /tmp/test-adapter", result.stdout)

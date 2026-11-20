@@ -26,7 +26,7 @@ class Stage2DABackend(unittest.TestCase):
             micro_batch_size=1,
             max_length=12288, max_new_tokens=1536,
             vllm_memory_utilization=.70, judge_workers=4,
-            judge_model="qwen3.7-flash",
+            judge_model="deepseek-v4.1-flash-1017",
             judge_api_key_env="DASHSCOPE_API_KEY",
             judge_registry="config/model_config.yaml",
         )
@@ -43,11 +43,29 @@ class Stage2DABackend(unittest.TestCase):
         self.assertFalse(kwargs["vllm_enable_sleep_mode"])
         self.assertEqual(kwargs["vllm_mode"], "server")
         self.assertIsNone(kwargs["generation_batch_size"])
-        self.assertEqual(cfg["judge"]["model"], "qwen3.7-flash")
+        self.assertEqual(cfg["judge"]["model"], "deepseek-v4.1-flash-1017")
+        self.assertEqual(cfg["judge"]["base_url"], "https://dashscope.aliyuncs.com/compatible-mode/v1")
         self.assertEqual(cfg["judge"]["workers"], 4)
         self.assertEqual(cfg["rollout"]["max_completion_tokens"], 1536)
         self.assertTrue(str(cfg["paths"]["train_parquet"]).endswith("stage2_da/train.parquet"))
         self.assertFalse(cfg["model"]["load_in_4bit"])
+
+    def test_judge_override_uses_shared_registry_not_hardcoded_default(self):
+        # The CLI, shell and YAML defaults agree, but ablations can still
+        # select another registered model without a stale endpoint.
+        args = self.args()
+        args.judge_model = "qwen3.7-flash"
+        cfg = build_stage2_config(args)
+        self.assertEqual(cfg["judge"]["model"], "qwen3.7-flash")
+        self.assertEqual(
+            cfg["judge"]["base_url"],
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+
+        args = self.args()
+        args.judge_model = "missing-judge"
+        with self.assertRaisesRegex(ValueError, "OpenAI-compatible"):
+            build_stage2_config(args)
 
     def test_global_judge_paths_are_pinned_to_prepared_private_context(self):
         args = self.args()
