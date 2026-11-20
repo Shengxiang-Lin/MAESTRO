@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 import sys
 
+from tqdm.auto import tqdm
+
 ROOT_PATH = Path(__file__).resolve().parents[2]
 if str(ROOT_PATH) not in sys.path:
     sys.path.insert(0, str(ROOT_PATH))
@@ -23,11 +25,19 @@ from baseline.dataset_common import (
 )
 
 
-def convert(decisions: list[dict], scene_splits: dict[str, str]):
+def convert(decisions: list[dict], scene_splits: dict[str, str],
+            *, progress: bool = False):
     result = {name: [] for name in SPLITS}
     metadata = {name: [] for name in SPLITS}
-    for row in decisions:
+    bar = tqdm(decisions, desc="SFT conversion", unit="decision",
+               disable=not progress)
+    by_split = Counter()
+    for index, row in enumerate(bar):
         split = scene_splits[row["scene_id"]]
+        by_split[split] += 1
+        if progress and (index + 1) % 128 == 0:
+            bar.set_postfix(train=by_split["train"], val=by_split["val"],
+                            test=by_split["test"], refresh=False)
         result[split].append({
             "prompt": row["prompt"],
             "completion": [{
@@ -45,6 +55,9 @@ def convert(decisions: list[dict], scene_splits: dict[str, str]):
             "action": row["reference_action"]["action"],
             "generation_mode": row["generation_mode"],
         })
+    if progress:
+        bar.set_postfix(train=by_split["train"], val=by_split["val"],
+                        test=by_split["test"], refresh=True)
     return result, metadata
 
 
@@ -54,22 +67,24 @@ def prepare(
     *, seed: int = 17, train_ratio: float = 0.8, val_ratio: float = 0.1,
     split_map: Path | None = None, include_fallback: bool = False,
     strict_conflicts: bool = False, overwrite: bool = False,
-    dry_run: bool = False,
+    dry_run: bool = False, progress: bool = False,
 ) -> dict:
-    decisions, _, scene_ids, source_manifest = load_base(source_dir)
+    decisions, _, scene_ids, source_manifest = load_base(
+        source_dir, progress=progress,
+    )
     mapping = get_splits(
         scene_ids, seed=seed, ratios=(
             train_ratio, val_ratio, 1 - train_ratio - val_ratio,
         ), split_map=split_map,
     )
     kept, skipped = select_rows(
-        decisions, include_fallback=include_fallback,
+        decisions, include_fallback=include_fallback, progress=progress,
     )
     split_of = mapping["scene_to_split"]
-    report = audit_selection(kept, split_of)
+    report = audit_selection(kept, split_of, progress=progress)
     if strict_conflicts and report["conflicting_prompt_groups"]:
         raise ValueError("da_sft_conflicting_supervised_completions")
-    rows, metadata = convert(kept, split_of)
+    rows, metadata = convert(kept, split_of, progress=progress)
     if any(not rows[s] for s in SPLITS):
         raise ValueError(
             "da_sft_empty_train_val_or_test_split:" +
@@ -95,7 +110,8 @@ def prepare(
     import pyarrow.parquet as pq
 
     out = prepare_directory(output_dir, overwrite=overwrite)
-    for split in SPLITS:
+    for split in tqdm(SPLITS, desc="Write SFT Parquet", unit="split",
+                      disable=not progress):
         name = "eval" if split == "val" else split
         dest = out / (name + ".parquet")
         pq.write_table(pa.Table.from_pylist(rows[split]), dest)
@@ -122,6 +138,8 @@ def main(argv=None):
     parser.add_argument("--strict-conflicts", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--no-progress", action="store_true",
+                        help="Disable tqdm bars for batch logs")
     args = parser.parse_args(argv)
     print(json.dumps(prepare(
         source_dir=args.source_dir, output_dir=args.output_dir,
@@ -130,6 +148,7 @@ def main(argv=None):
         include_fallback=args.include_fallback,
         strict_conflicts=args.strict_conflicts,
         overwrite=args.overwrite, dry_run=args.dry_run,
+        progress=not args.no_progress,
     ), ensure_ascii=False, indent=2))
     return 0
 
