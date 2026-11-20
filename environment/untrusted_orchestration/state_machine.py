@@ -341,7 +341,7 @@ class ExecutionState:
         because some identifiers happen to occur in public free-form prose.
         """
         finish = (report or {}).get("finish_result") or {}
-        from .reporting.result_text import delivered_records
+        from .reporting.surface import delivered_records
         rows = delivered_records(finish.get("result", ""))
         if not isinstance(rows, list):
             return None
@@ -366,7 +366,7 @@ class ExecutionState:
         finish = (report or {}).get("finish_result") or {}
         body = str(finish.get("result", ""))
         try:
-            from .reporting.result_text import delivered_records
+            from .reporting.surface import delivered_records
             parsed = delivered_records(body)
         except (TypeError, ValueError):
             parsed = None
@@ -659,7 +659,7 @@ class ExecutionState:
             "finish_result"
         ) or {}
         try:
-            from .reporting.result_text import delivered_records
+            from .reporting.surface import delivered_records
             rows = delivered_records(finish.get("result", ""))
         except (TypeError, ValueError):
             return None
@@ -732,7 +732,7 @@ class ExecutionState:
         # These checks parse ONLY statements in the delivered report.
         # The witness was constructed from the operator's actual input
         # relations on both clean and failed attempts; no Gold is consulted.
-        from .reporting.public_work import visible_work_discrepancy
+        from .reporting.work_evidence import visible_work_discrepancy
         finish = (self.public_reports.get(task_id) or {}).get("finish_result") or {}
         work_text = " ".join(str(x) for x in (
             finish.get("summary") or "",
@@ -1184,7 +1184,7 @@ class ExecutionState:
         The simulator retains these as PRIVATE risk-supervision diagnostics.
         The Main still receives only the original O1 Sub-Agent history.
         """
-        from .reporting.public_work import visible_work_discrepancy
+        from .reporting.work_evidence import visible_work_discrepancy
         issues = []
         for tid in sorted(self.public_reports):
             if tid not in self.current:
@@ -1341,7 +1341,7 @@ def deterministic_report(
         narrative = "The assigned evidence acquisition did not return an inspectable deliverable."
         mode = "executed_missing"
     else:
-        from .reporting.result_text import render_records
+        from .reporting.surface import render_records
         result = render_records(actual_rows)
         available = ", ".join(attempt.available_fields) or "(none)"
         unresolved = ", ".join(attempt.runtime.get("missing_fields", []))
@@ -1350,7 +1350,7 @@ def deterministic_report(
             str(len(actual_rows)) + " record(s) for " +
             available + "."
         )
-        from .reporting.public_work import public_work_clauses
+        from .reporting.work_evidence import public_work_clauses
         clauses = public_work_clauses(
             attempt.runtime.get("observed_operator_steps", [])
         )

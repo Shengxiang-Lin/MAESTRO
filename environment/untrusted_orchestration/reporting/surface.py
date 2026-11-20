@@ -1,6 +1,7 @@
 """Lossless, cited public record prose shared by rendering and visibility checks."""
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import re
 
@@ -84,3 +85,46 @@ def delivered_records(result: str) -> list[dict] | None:
         {"values": row, "source_fact_refs": []}
         for row in rows
     ]
+
+
+# Public narration sanitation: operate on text, never on private evidence.
+_INTERNAL = re.compile(r"\b(?:work_M\d+|m\d+_op\d+)\b", re.I)
+_SUBTASK = re.compile(r"\bwork_M\d+\b", re.I)
+_PRIMITIVE = re.compile(r"\bm\d+_op\d+\b", re.I)
+
+
+def sanitize_public_prose(value: str) -> str:
+    """Replace private labels, not evidence identities or measurements."""
+    return _PRIMITIVE.sub(
+        "the recorded execution step",
+        _SUBTASK.sub("an upstream Sub-Agent result", value),
+    )
+
+
+def sanitize_report_narration(value: str) -> str:
+    """Normalize framework prose, preserving all Result values and citations."""
+    value = sanitize_public_prose(value)
+    value = re.sub(r"\bWorkProduct\b", "returned findings", value, flags=re.I)
+    return re.sub(r"\bSet of evidence\b", "evidence", value, flags=re.I)
+
+
+def sanitize_public_report(report: dict) -> dict:
+    """Return a copy with only Main-facing prose fields normalized."""
+    result = deepcopy(report)
+    for field in ("trace_summary", "task_instruction"):
+        if isinstance(result.get(field), str):
+            result[field] = (sanitize_report_narration(result[field])
+                             if field == "trace_summary"
+                             else sanitize_public_prose(result[field]))
+    finish = result.get("finish_result")
+    if isinstance(finish, dict):
+        for field in ("result", "summary"):
+            if isinstance(finish.get(field), str):
+                finish[field] = (sanitize_report_narration(finish[field])
+                                 if field == "summary"
+                                 else sanitize_public_prose(finish[field]))
+    return result
+
+
+def internal_labels_in_text(value: str) -> list[str]:
+    return sorted(set(_INTERNAL.findall(value))) if isinstance(value, str) else []

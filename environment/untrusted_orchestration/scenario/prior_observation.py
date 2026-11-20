@@ -323,7 +323,7 @@ def comparison_rows(state, *, require_visible_scope: bool = True) -> list[dict]:
     seen the conflict, a later retry must actually reconcile the values:
     omitting the scope sentence does not magically resolve the conflict.
     """
-    from ..reporting.result_text import delivered_records
+    from ..reporting.surface import delivered_records
 
     comparisons = []
     for tid, task in state.tasks.items():

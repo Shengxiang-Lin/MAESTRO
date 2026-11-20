@@ -257,7 +257,7 @@ class Stage4BackfillTests(unittest.TestCase):
             self.assertEqual(summary["candidate_language_backfill_attempts"], 1)
             self.assertEqual(summary["feedback_rounds_backfilled"], 1)
             self.assertEqual(summary["candidates_selected_for_language_review"], 2)
-            self.assertEqual(summary["reviewed_branches"], 1)
+            self.assertEqual(summary["recovered"], 1)
             self.assertLessEqual(
                 summary["main_actions_processed"],
                 summary["main_actions_planned"],

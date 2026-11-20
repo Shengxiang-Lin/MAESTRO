@@ -336,7 +336,7 @@ class CandidateExplorationTests(unittest.TestCase):
                 delayed_evidence_probability=0.0,
             )
             self.assertEqual(summary["status"], "done")
-            self.assertEqual(summary["requested_feedback_rounds"], 1)
+            self.assertEqual(summary["rounds_extracted_from_base"], 1)
             round_index = [
                 json.loads(line) for line in
                 (out / "feedback_round_index.jsonl").read_text().splitlines()
@@ -355,7 +355,7 @@ class CandidateExplorationTests(unittest.TestCase):
                 summary["candidates_selected_for_language_review"], 1
             )
             self.assertEqual(
-                summary["screened_out_before_llm"],
+                summary["candidates_filtered_before_llm"],
                 summary["candidate_trials"] -
                 summary["candidates_selected_for_language_review"],
             )

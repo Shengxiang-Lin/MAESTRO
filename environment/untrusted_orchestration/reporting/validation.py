@@ -12,7 +12,7 @@ from environment.implement_subtask.reporting import (
     _normalize_author_result, _stage_scope_issues,
 )
 from ..state_machine import Attempt, relation_rows
-from .report_contract import render_delivered_result
+from .contract import render_delivered_result
 
 
 _TOKEN = re.compile(

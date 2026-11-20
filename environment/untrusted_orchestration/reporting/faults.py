@@ -12,7 +12,7 @@ from copy import deepcopy
 import json
 
 from environment.untrusted_orchestration.runtime.faults import relation_rows
-from .result_text import render_records
+from .surface import render_records
 
 
 def render_report_fault(base: dict, attempt) -> tuple[dict, dict]:

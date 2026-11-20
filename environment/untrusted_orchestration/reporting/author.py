@@ -1,7 +1,7 @@
 """4B: compile executed facts, naturalize wording, and review additions.
 
-Execution/Delivery/Observed Discrepancy are owned by report_contract.py;
-fact validation is isolated in report_validation.py. This module does not
+Execution/Delivery/Observed Discrepancy are owned by contract.py;
+fact validation is isolated in validation.py. This module does not
 inspect hidden clean answers. Report-only adversarial feedback deliberately
 bypasses normal factual naturalization and is NOT silently repaired.
 """
@@ -15,11 +15,11 @@ from environment.implement_subtask.reporting import _public_field_text
 from environment.implement_subtask.stage_local_claims import (
     normalize_report_language,
 )
-from .report_contract import (
+from .contract import (
     build_report_contract, render_delivered_result,
 )
-from .report_validation import validate_report_draft
-from .public_language import sanitize_public_prose, sanitize_report_narration
+from .validation import validate_report_draft
+from .surface import sanitize_public_prose, sanitize_report_narration
 from ..state_machine import deterministic_report, Attempt
 
 _AUTHOR_SYSTEM = """Naturalize a Sub-Agent's executed evidence into concise
@@ -217,11 +217,11 @@ def naturalize_report(task: dict, attempt: Attempt, *,
     # author/critic cannot silently "fix" the malicious claim.
     report_fault_kind = attempt.runtime.get("report_fault_kind")
     if report_fault_kind and report_fault_kind != "done_but_incomplete":
-        from .report_faults import render_report_fault
+        from .faults import render_report_fault
         return render_report_fault(base, attempt)
     if author is None:
         if report_fault_kind == "done_but_incomplete":
-            from .report_faults import render_report_fault
+            from .faults import render_report_fault
             return render_report_fault(base, attempt)
         return base, {"status": "accepted", "mode": provenance,
                       "attempts": 0}
@@ -424,7 +424,7 @@ def naturalize_report(task: dict, attempt: Attempt, *,
             if report_fault_kind == "done_but_incomplete":
                 # Controlled DONE presentation, but actual evidence prose
                 # has been independently authored and reviewed by the LLM.
-                from .report_faults import render_report_fault
+                from .faults import render_report_fault
                 report, _ = render_report_fault(report, attempt)
             return report, {
                 "status": "accepted", "mode": "llm_reviewed",
@@ -462,7 +462,7 @@ def naturalize_report(task: dict, attempt: Attempt, *,
                            if isinstance(decision, dict) else "",
         })
     if report_fault_kind == "done_but_incomplete":
-        from .report_faults import render_report_fault
+        from .faults import render_report_fault
         base, _ = render_report_fault(base, attempt)
     return base, {
         "status": "fallback",

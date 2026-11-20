@@ -169,7 +169,7 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
         })
 
     if isinstance(result, str):
-        from environment.untrusted_orchestration.reporting.result_text import delivered_records
+        from environment.untrusted_orchestration.reporting.surface import delivered_records
         parsed = delivered_records(result)
         if isinstance(parsed, list):
             modes.add("structured_result")

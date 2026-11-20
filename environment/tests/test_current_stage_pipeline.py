@@ -163,7 +163,7 @@ class CurrentStagePipelineTests(unittest.TestCase):
 
     def test_many_row_code_owned_delivery_never_truncates(self):
         from environment.implement_subtask.reporting import code_owned_result
-        from environment.untrusted_orchestration.reporting.report_contract import (
+        from environment.untrusted_orchestration.reporting.contract import (
             render_delivered_result,
         )
         rows = [{
@@ -272,7 +272,7 @@ class CurrentStagePipelineTests(unittest.TestCase):
         from environment.untrusted_orchestration.state_machine import (
             ExecutionState,
         )
-        from environment.untrusted_orchestration.reporting.report_contract import (
+        from environment.untrusted_orchestration.reporting.contract import (
             build_report_contract, render_delivered_result,
         )
         from environment.untrusted_orchestration.runtime.faults import relation_rows

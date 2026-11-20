@@ -47,7 +47,7 @@ def _clone_source_query(original: dict, branch_round: int) -> dict:
 
 def public_query_rows(task: dict, report: dict) -> list[dict] | None:
     """Read a complete, explicit query result from public text only."""
-    from ..reporting.result_text import delivered_records
+    from ..reporting.surface import delivered_records
     from ..inspection.visible_claim_extraction import (
         extract_visible_claims, _parse_current_record_prose,
     )
