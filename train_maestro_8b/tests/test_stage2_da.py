@@ -22,7 +22,8 @@ class Stage2DABackend(unittest.TestCase):
             optim="adamw_8bit", lora_rank=32, lora_alpha=64,
             temperature=1.0, kl_coef=0.01, clip_epsilon=0.2,
             warmup_ratio=0.03, seed=42,
-            num_generations=8, gradient_accumulation_steps=1,
+            num_generations=8, gradient_accumulation_steps=8,
+            micro_batch_size=1,
             max_length=12288, max_new_tokens=1536,
             vllm_memory_utilization=.70, judge_workers=4,
             judge_model="qwen3.7-flash",
@@ -39,7 +40,9 @@ class Stage2DABackend(unittest.TestCase):
         self.assertEqual(kwargs["per_device_train_batch_size"], 1)
         self.assertEqual(kwargs["gradient_accumulation_steps"], 8)
         self.assertTrue(kwargs["use_vllm"])
-        self.assertTrue(kwargs["vllm_enable_sleep_mode"])
+        self.assertFalse(kwargs["vllm_enable_sleep_mode"])
+        self.assertEqual(kwargs["vllm_mode"], "server")
+        self.assertIsNone(kwargs["generation_batch_size"])
         self.assertEqual(cfg["judge"]["model"], "qwen3.7-flash")
         self.assertEqual(cfg["judge"]["workers"], 4)
         self.assertEqual(cfg["rollout"]["max_completion_tokens"], 1536)
