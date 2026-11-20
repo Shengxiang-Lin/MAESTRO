@@ -8,24 +8,36 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
+from tqdm.auto import tqdm
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def read_jsonl(path: Path) -> list[dict]:
+def read_jsonl(
+    path: Path, *, progress: bool = False, desc: str | None = None,
+) -> list[dict]:
+    """Read JSONL with optional byte-accurate progress and no counting pass."""
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(path)
     result = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{path}:{number}: invalid_json") from exc
-        if not isinstance(item, dict):
-            raise ValueError(f"{path}:{number}: expected_json_object")
-        result.append(item)
+    with path.open("rb") as handle, tqdm(
+        total=path.stat().st_size, desc=desc or f"Read {path.name}",
+        unit="B", unit_scale=True, unit_divisor=1024,
+        disable=not progress, mininterval=0.5, leave=False,
+    ) as bar:
+        for number, raw in enumerate(handle, 1):
+            bar.update(len(raw))
+            line = raw.decode("utf-8")
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{number}: invalid_json") from exc
+            if not isinstance(item, dict):
+                raise ValueError(f"{path}:{number}: expected_json_object")
+            result.append(item)
     return result
 
 
