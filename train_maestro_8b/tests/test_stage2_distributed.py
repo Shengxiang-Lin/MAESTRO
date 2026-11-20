@@ -22,8 +22,8 @@ class Stage2DistributedTests(unittest.TestCase):
         self.assertEqual(self.cfg["distributed"]["train_gpus"], 1)
         rollout, _ = topology(self.cfg, "serve")
         trainer, _ = topology(self.cfg, "train")
-        self.assertEqual(rollout, ["0"])
-        self.assertEqual(trainer, ["1"])
+        self.assertEqual(rollout, ["1"])
+        self.assertEqual(trainer, ["0"])
         self.assertTrue(set(rollout).isdisjoint(trainer))
         plan = grpo_runtime.batch_plan(self.cfg)
         self.assertEqual(plan["per_device_train_batch_size"], 1)
@@ -31,19 +31,18 @@ class Stage2DistributedTests(unittest.TestCase):
         self.assertEqual(plan["prompts_per_step"], 1)
         self.assertIsNone(plan["generation_batch_size"])
 
-    def test_swapped_roles_allow_gpu_zero_training(self):
-        # A physical GPU 0 trainer and GPU 1 server are a valid, disjoint
-        # topology; ensure parsing as well as launcher mapping accepts it.
+    def test_original_gpu_order_can_still_be_configured(self):
+        # Other machines can still deploy vLLM on GPU 0 and trainer on GPU 1.
         raw = yaml.safe_load(Path(grpo_runtime.DEFAULT_CONFIG).read_text())
-        raw["distributed"]["rollout_gpu"] = 1
-        raw["distributed"]["train_gpu_start"] = 0
+        raw["distributed"]["rollout_gpu"] = 0
+        raw["distributed"]["train_gpu_start"] = 1
         with tempfile.TemporaryDirectory() as tmp:
-            cfg_file = Path(tmp) / "swapped.yaml"
+            cfg_file = Path(tmp) / "original-order.yaml"
             cfg_file.write_text(yaml.safe_dump(raw), encoding="utf-8")
             cfg = grpo_runtime.load_config(cfg_file)
-        self.assertEqual(topology(cfg, "serve")[0], ["1"])
-        self.assertEqual(topology(cfg, "train")[0], ["0"])
-        self.assertEqual(topology(cfg, "train")[1]["CUDA_VISIBLE_DEVICES"], "0")
+        self.assertEqual(topology(cfg, "serve")[0], ["0"])
+        self.assertEqual(topology(cfg, "train")[0], ["1"])
+        self.assertEqual(topology(cfg, "train")[1]["CUDA_VISIBLE_DEVICES"], "1")
         self.assertEqual(grpo_runtime.batch_plan(cfg)["prompts_per_step"], 1)
 
     def test_swapped_roles_still_reject_overlapping_devices(self):
@@ -58,7 +57,11 @@ class Stage2DistributedTests(unittest.TestCase):
 
     def test_4gpu_three_trainer_topology_and_microbatch_scaling(self):
         cfg = deepcopy(self.cfg)
-        cfg["distributed"]["train_gpus"] = 3
+        # With four physical cards use rollout 0 + trainers 1..3.
+        # The default two-card swap is intentionally not suitable for 1+3.
+        cfg["distributed"].update({
+            "rollout_gpu": 0, "train_gpu_start": 1, "train_gpus": 3,
+        })
         self.assertEqual(topology(cfg, "train")[0], ["1", "2", "3"])
         self.assertEqual(grpo_runtime.batch_plan(cfg)["prompts_per_step"], 3)
         cfg["training"]["per_device_train_batch_size"] = 2
@@ -87,7 +90,7 @@ class Stage2DistributedTests(unittest.TestCase):
         self.assertIn("--enforce-eager", cmd)
         _, env = topology(self.cfg, "serve")
         self.assertEqual(env["VLLM_SERVER_DEV_MODE"], "1")
-        self.assertEqual(env["CUDA_VISIBLE_DEVICES"], "0")
+        self.assertEqual(env["CUDA_VISIBLE_DEVICES"], "1")
 
     def test_training_command_is_torchrun_with_three_ranks(self):
         cfg = deepcopy(self.cfg)
