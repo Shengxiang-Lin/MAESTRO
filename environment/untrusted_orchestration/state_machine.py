@@ -1153,6 +1153,52 @@ class ExecutionState:
                 )
         return None
 
+    def public_verification_focus(self, task_id: str, *, issue: str | None = None) -> dict | None:
+        """Name the *publicly disputed claim*, not the privately faulted field.
+
+        A full Macro output contract may contain several fields. Only a
+        Result/Summary mismatch or a still-active cited cross-report event
+        supplies a specific focus. Other observable issues retain the
+        existing broad repair contract rather than guessing from Gold or
+        fault provenance.
+        """
+        current = self.current.get(task_id)
+        if current is None or self.public_status(task_id) != "done":
+            return None
+        if issue is None:
+            issue = self.public_repair_issue(task_id)
+        if not issue:
+            return None
+
+        # Use the SAME typed public comparator as the runtime detector and
+        # Stage-4C critic. An ambiguous multi-row summary gives no focus.
+        from .inspection.claim_comparison import report_claim_conflicts
+        conflicts = report_claim_conflicts(self.public_reports.get(task_id) or {})
+        if conflicts and issue == self._visible_report_internal_conflict(task_id):
+            claim = conflicts[0]
+            return {
+                "basis": "result_summary_disagreement",
+                "subject": claim["subject"],
+                "attribute": claim["field"],
+            }
+
+        # An old event is not an active witness after a later recheck. The
+        # selected task/version must still be the actual repair target.
+        if issue.startswith("The received reports disagree about "):
+            for event in reversed(self.active_public_conflicts()):
+                if (event.get("recheck_task_id") == task_id
+                        and event.get("recheck_task_version") == current.version):
+                    claim = event.get("claim") or {}
+                    if isinstance(claim.get("attribute"), str) and isinstance(
+                        claim.get("subject"), str
+                    ):
+                        return {
+                            "basis": "cross_report_disagreement",
+                            "subject": claim["subject"],
+                            "attribute": claim["attribute"],
+                        }
+        return None
+
     def unresolved_cited_conflicts(self) -> bool:
         self._public_conflict_cache = None
         return bool(self.active_public_conflicts())
