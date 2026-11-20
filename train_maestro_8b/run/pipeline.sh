@@ -14,12 +14,15 @@ RUN_ROOT="${RUN_ROOT:-$ROOT/workspace/maestro_8b}"
 STAGE2_TRAINER="${STAGE2_TRAINER:-da}"     # da (default) or riskkv
 DA_REWARD_MODE="${DA_REWARD_MODE:-global}"  # global | hybrid | deterministic | judge_only | da
 DA_DATA="${DA_DATA:-$RUN_ROOT/stage2_da}"
+DA_UNIFIED_DIR="${DA_UNIFIED_DIR:-$ROOT/environment/data/unified}"
+DA_INCLUDE_FALLBACK="${DA_INCLUDE_FALLBACK:-0}"
+DA_SPLIT_SEED="${DA_SPLIT_SEED:-17}"
+DA_SPLIT_MAP="${DA_SPLIT_MAP:-}"
 DA_GRPO_CKPT="${DA_GRPO_CKPT:-$RUN_ROOT/checkpoints/stage2-${DA_REWARD_MODE}-grpo}"
 DA_PILOT_CKPT="${DA_PILOT_CKPT:-$RUN_ROOT/checkpoints/stage2-${DA_REWARD_MODE}-pilot}"
 DA_PILOT_STEPS="${DA_PILOT_STEPS:-3}"
 DA_PILOT_ROWS="${DA_PILOT_ROWS:-16}"
 DA_PILOT_NEW_TOKENS="${DA_PILOT_NEW_TOKENS:-1536}"
-DA_REVIEWED_ONLY="${DA_REVIEWED_ONLY:-0}"
 RISK_DATA="${RISK_DATA:-$STAGE4_DIR/private/window_risk}"
 BELIEF_DATA="${BELIEF_DATA:-$STAGE4_DIR/private/evidence_belief}"
 BELIEF_CKPT="${BELIEF_CKPT:-$RUN_ROOT/checkpoints/belief-stage1-pilot}"
@@ -103,8 +106,8 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
   export        Stage4 episodes/claim states -> train/val risk rows
   features      Frozen Qwen3-8B NF4 train/val window-feature cache
   risk          Train Risk Head only, using cached NF4 features
-  prepare-grpo  DA: export Stage4 -> Parquet; RiskKV: private-state reward rows
-  preflight     DA: baseline package/input checks; RiskKV: cache/logprob
+  prepare-grpo  DA: canonical unified dataset -> train/val/test Parquet; RiskKV: private-state reward rows
+  preflight     DA: independent package/input/reward-context checks; RiskKV: cache/logprob
   pilot         DA: 3-step smoke; hybrid: local validity + LLM semantic Judge
                 RiskKV: previous strict Action-reward pilot
   audit-pilot   DA: review Judge reward diagnostics; RiskKV: invalid reasons
@@ -116,8 +119,9 @@ Usage: bash train_maestro_8b/run/pipeline.sh COMMAND
 
 Override settings via environment variables or run/config.env:
   STAGE2_TRAINER (da|riskkv), DA_REWARD_MODE (global|hybrid|deterministic|judge_only|da),
-  DA_DATA, DA_GRPO_CKPT, DA_PILOT_CKPT,
-  DA_PILOT_STEPS, DA_PILOT_ROWS, DA_PILOT_NEW_TOKENS, DA_REVIEWED_ONLY,
+  DA_DATA, DA_UNIFIED_DIR, DA_INCLUDE_FALLBACK, DA_SPLIT_SEED, DA_SPLIT_MAP,
+  DA_GRPO_CKPT, DA_PILOT_CKPT,
+  DA_PILOT_STEPS, DA_PILOT_ROWS, DA_PILOT_NEW_TOKENS,
   MODEL, STAGE1_DIR, STAGE4_DIR, RUN_ROOT, MAX_LENGTH,
   BELIEF_DATA, BELIEF_CKPT, BELIEF_MAX_LENGTH, BELIEF_EPOCHS,
   BELIEF_MAX_STEPS, BELIEF_GRAD_ACCUM, BELIEF_BATCH_SIZE,
