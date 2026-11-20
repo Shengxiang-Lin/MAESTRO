@@ -41,9 +41,9 @@ sidecars automatically (provided Stage4 Claim supervision exists).
 SKIP_COMPLETED=0 bash train_maestro_8b/run/pipeline.sh prepare-grpo
 bash train_maestro_8b/run/pipeline.sh preflight
 bash train_maestro_8b/run/pipeline.sh plan-gpus
-# Terminal A (rollout GPU 0):
+# Terminal A (rollout GPU 1):
 bash train_maestro_8b/run/pipeline.sh serve-vllm
-# Terminal B (train GPU 1, after vLLM health is ready):
+# Terminal B (train GPU 0, after vLLM health is ready):
 DA_PILOT_NEW_TOKENS=4096 bash train_maestro_8b/run/pipeline.sh pilot
 ```
 
@@ -60,9 +60,9 @@ decisions when upgrading the private evaluator context.
 ```yaml
 distributed:
   vllm_mode: server
-  train_gpus: 1        # test with 1 rollout + 1 trainer GPU
-  rollout_gpu: 0
-  train_gpu_start: 1
+  train_gpus: 1        # RTX 6000D: GPU 1 rollout, GPU 0 trainer
+  rollout_gpu: 1
+  train_gpu_start: 0
   server_host: 127.0.0.1
   server_port: 8000
 
@@ -71,32 +71,33 @@ training:
   gradient_accumulation_steps: 8
 ```
 
-### Optional: swap rollout and training cards for GPU-specific diagnostics
+### GPU-specific deployment and verification
 
-When one physical card works for vLLM but the other fails, the configuration
-supports swapping roles without changing the learner or dataset:
+The default RTX 6000D two-card deployment intentionally uses **GPU 1 for
+vLLM Rollout and GPU 0 for Unsloth/TRL LoRA training**. A standalone vLLM
+launch succeeded on GPU 1 and failed with `CUDA illegal memory access` on
+GPU 0; this is not yet a successful end-to-end training validation.
 
-```yaml
-distributed:
-  train_gpus: 1
-  rollout_gpu: 1
-  train_gpu_start: 0
-```
+Stop any older GPU 1 test vLLM server first (for example, one on port
+8808). The full MAESTRO vLLM server needs extra NCCL weight transfer and
+processed logprobs options not present in the standalone test; verify
+`serve-vllm` reaches HTTP 200 on port 8000, then run a **short pilot**
+before starting full `grpo`. If GPU 0 also fails during LoRA backward,
+stop the run and troubleshoot or replace the failing GPU; the role swap
+does not repair the underlying CUDA fault.
 
-This launches vLLM on GPU 1 and torchrun training on GPU 0. Stop any existing
-GPU 1 test server, then start `serve-vllm` and run `pilot` as usual.
-**Only use this after confirming the same full vLLM server flags work on GPU 1.**
-A GPU that fails vLLM may also fail backward; a successful serve smoke test
-does not prove the swapped GRPO pilot will train safely. Preserve existing
-checkpoints and use a fresh pilot output directory when re-testing.
+To restore the original two-card placement, set `rollout_gpu: 0` and
+`train_gpu_start: 1`. On four GPUs, **do not just change
+`train_gpus: 3`** from this default: it would overlap GPU 1. Instead
+set `rollout_gpu: 0`, `train_gpu_start: 1`, and `train_gpus: 3`
+for GPU 0 rollout and training GPUs 1/2/3.
 
-`train_gpus: 1` means physical GPU 0 serves vLLM and GPU 1 trains.
-For four GPUs change **only** `train_gpus: 3`: GPU 0 stays rollout-only
-and GPUs 1,2,3 become three DDP training ranks. The global batch is
+The global batch is
 `train_gpus * per_device_train_batch_size * gradient_accumulation_steps`
-completions; with `num_generations: 8` it is 1 or 3 prompt groups/step.
-Increase `per_device_train_batch_size: 2` only after checking VRAM;
-this yields 6 prompt groups/step on three training GPUs at A=8.
+completions; with `num_generations: 8` it is 1 or 3 prompt groups/step
+for one or three trainer GPUs. Increase `per_device_train_batch_size: 2`
+only after checking VRAM; this yields 6 prompt groups/step with three
+trainers and A=8.
 
 TRL owns the Server-mode generation, adapter/weight synchronization
 and DDP gradients. Unsloth loads the training model with
@@ -113,7 +114,7 @@ bash train_maestro_8b/run/pipeline.sh prepare-grpo
 bash train_maestro_8b/run/pipeline.sh preflight
 bash train_maestro_8b/run/pipeline.sh plan-gpus
 
-# Terminal A: blocking vLLM Server on physical GPU 0
+# Terminal A: blocking vLLM Server on physical GPU 1
 bash train_maestro_8b/run/pipeline.sh serve-vllm
 
 # Terminal B: after /health on :8000 is ready
