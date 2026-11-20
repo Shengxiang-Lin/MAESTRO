@@ -100,3 +100,75 @@ def reasoning_evidence_issues(
             continue
         return ["prematurely_claims_conflict_verified_or_resolved"]
     return []
+
+
+def derivation_instructions(task: dict) -> list[str]:
+    """Describe planned operations and named inputs, without executing them."""
+    clauses = []
+    for node in task.get("operator_chain", []):
+        op = node["op"]
+        if op == "goal_compute":
+            spec = node.get("goal_operation", {})
+            inputs = ", ".join(node.get("input_fields", []))
+            name = spec.get("function") or spec.get("op", "")
+            if name == "ratio":
+                fields = node["input_fields"]
+                rule = fields[-2] + " divided by " + fields[-1]
+            elif name == "temporal_difference":
+                rule = "elapsed days between " + inputs
+            elif name == "temporal_midpoint":
+                rule = "midpoint between " + inputs
+            else:
+                rule = name.replace("_", " ") + " using " + inputs
+            clauses.append("Calculate " + node["output_field"] + " as " + rule + ".")
+        elif op == "derive_arithmetic":
+            symbol = " divided by " if node["operation"] == "ratio" else " absolute difference from "
+            clauses.append("Calculate " + node["output_field"] + " from "
+                           + node["left_field"] + symbol + node["right_field"] + ".")
+        elif op == "derive_date_gap":
+            clauses.append("Calculate elapsed days between " + node["left_field"]
+                           + " and " + node["right_field"] + ".")
+        elif op == "count":
+            clauses.append("Count the returned records after the preceding filters and deduplication.")
+        elif op == "filter_gte":
+            clauses.append("Keep " + node["field"] + " greater than or equal to "
+                           + str(node["value"]) + ".")
+    return clauses
+
+
+def reasoning_action_issues(reasoning: str, assignments: list[dict], *,
+                            question: str = "") -> list[str]:
+    """High-precision action/meaning checks, separate from LLM prose review."""
+    issues = []
+    if not isinstance(reasoning, str):
+        return ["reasoning_not_text"]
+    if assignments and all(not a.get("source_ids") and not a.get("tools")
+                           for a in assignments):
+        # Reading an already returned record is valid. Promise of a new
+        # external source/tool acquisition is not.
+        if re.search(
+            r"\b(?:I|we)\s+(?:must|will|need to|should)\s+"
+            r"(?:now\s+)?(?:re[- ]?)?(?:query|browse|search|fetch|open)\b"
+            r".{0,90}\b(?:source|web|website|image|audio|video|briefing|table)\b",
+            reasoning, re.I,
+        ):
+            issues.append("source_free_action_claims_external_acquisition")
+    instructions = " ".join(a.get("target_instruction", "") for a in assignments)
+    if ("elapsed days between date_a, date_b" in instructions
+            or "elapsed days between date_a and date_b" in instructions
+            or "midpoint between date_a, date_b" in instructions):
+        if re.search(
+            r"\b(?:earliest\s+(?:and|to)\s+(?:the\s+)?latest|"
+            r"minimum\s+and\s+maximum|first\s+and\s+last)\s+"
+            r"(?:(?:recorded|observation|logged)\s+)?dates?\b",
+            reasoning, re.I,
+        ):
+            issues.append("date_pair_replaced_with_observation_date_extrema")
+    if question:
+        for match in re.finditer(
+            r"\bquestion\s+(?:explicitly\s+)?(?:requires|demands|asks for)"
+            r"[^.!?]{0,85}?\b(entity_\d+)\b", reasoning, re.I,
+        ):
+            if match[1].casefold() not in question.casefold():
+                issues.append("intermediate_field_claimed_as_question_output")
+    return list(dict.fromkeys(issues))

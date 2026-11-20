@@ -40,11 +40,14 @@ def capture_decision_state(
     if round_number < 1 or max_parallel_tasks < 1:
         raise ValueError("invalid decision reward round/parallel cap")
     repair_set = set(repairs)
+    public_issue = getattr(state, "public_repair_issue", state.visible_discrepancy)
+    dependents = getattr(state, "decision_dependents", state._dependents)
+    contested = getattr(state, "contested_dependents", lambda: set())()
     unobservable = []
     for tid in repairs:
         observed_status = state.public_status(tid)
         current = state.current.get(tid)
-        issue = state.visible_discrepancy(tid)
+        issue = public_issue(tid)
         # The current state_machine also uses the private WorkProduct to
         # detect an absent result. If Main was actually sent a DONE report,
         # absence of the private product is NOT itself visible evidence.
@@ -63,7 +66,7 @@ def capture_decision_state(
     for tid in dict.fromkeys(repairs + ready):
         if not state.ready(tid):
             continue
-        if any(tid in state._dependents(parent) for parent in repair_set
+        if any(tid in dependents(parent) for parent in repair_set
                if parent != tid):
             continue
         feasible.append(tid)
@@ -90,7 +93,7 @@ def capture_decision_state(
             raise ValueError("unrecognized evidence operation")
         # Downstream leverage is a small, bounded tie-breaker, not an excuse
         # to ignore an observed contradiction.
-        descendants = len(state._dependents(tid))
+        descendants = len(dependents(tid))
         priority = round(
             URGENCY[operation] * (1.0 + min(0.20, 0.04 * descendants)), 6
         )
@@ -106,7 +109,7 @@ def capture_decision_state(
             "known_identifiers": list(goal["known_identifiers"]),
             "required_parent_fields": goal["required_parent_fields"],
             "depends_on": list(task["depends_on"]),
-            "descendants": sorted(state._dependents(tid)),
+            "descendants": sorted(dependents(tid)),
             "tools": list(contract["tools"]),
             "model": contract["model"],
             "priority": priority,
@@ -132,7 +135,8 @@ def capture_decision_state(
         "unobservable_private_repairs": sorted(unobservable),
         "unobservable_event_held_ready": privately_held_ready,
         "actionable": actions,
-        "blocked_task_ids": list(blocked),
+        "blocked_task_ids": sorted(set(blocked) | contested),
+        "public_conflict_blocked_task_ids": sorted(contested),
         "completed_task_ids": sorted(tid for tid in state.current
                                    if tid not in repair_set),
         "eligible_task_count": len(actions),

@@ -82,6 +82,14 @@ answer before the needed
 evidence is available, invent an extra result, or describe the process
 used to write or assess your text.
 
+Follow the named calculation inputs and operations in work_to_explain.
+A date pair is not the earliest/latest observation-log date unless that
+operation is explicitly requested. Intermediate identifiers support the
+investigation; do not say the question explicitly requests those fields.
+For source-free work, explain reuse of returned findings and recomputation;
+do not promise new source inspection. Explain only the current evidence
+step and avoid repeatedly calling intermediate retrievals the final step.
+
 Use two to four sentences focused on this round's missing fields or visible
 discrepancy. Name concrete returned findings and the next requested output.
 For a final derivation, explain which already delivered inputs will be combined.
@@ -112,6 +120,11 @@ the current delegated evidence requests. The assignment contract was
 deterministically validated in the evidence simulator and is IMMUTABLE.
 The review input deliberately contains no editable task_instruction/context,
 tool names or model routing. Do not demand any changes to these fields.
+
+Check consistency with the named inputs and operations in the requested work.
+Do not substitute date extrema for a specified date pair, claim an intermediate
+identifier is a user-requested final output, or promise new external acquisition
+when the assignment only combines already returned findings.
 
 Judge whether the reasoning:
 (1) refers only to information already present in the current Main-visible

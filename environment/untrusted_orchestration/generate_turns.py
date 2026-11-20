@@ -151,7 +151,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "state_machine.py", "reporting/report_author.py",
         "trusted_prefix.py",
         "trajectory_builder.py", "generate_turns.py",
-        "offline_pipeline.py",
+        "offline_pipeline.py", "decision_reward_replay.py",
         "runtime/evidence_operators.py",
         "../generate_question/execution/compiler.py",
         "../generate_question/execution/program_ir.py",

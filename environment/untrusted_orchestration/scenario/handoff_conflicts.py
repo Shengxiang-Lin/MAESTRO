@@ -195,6 +195,36 @@ def expose_prior_handoff(state, task_entries: list[dict],
     }
 
 
+def restore_handoff_contract(scene: dict, anchor: dict | None) -> dict:
+    """Restore a public keyed-query relationship, never an expected answer.
+
+    expose_prior_handoff establishes this link on the runtime task copy.
+    Offline replay must restore the same link; its claims are still checked
+    against the reports actually received at the replay decision.
+    """
+    if not anchor or anchor.get("construction") != "earlier_executed_keyed_handoff":
+        return scene
+    old, target, field = (anchor["task_id"], anchor["target_task_id"], anchor["field"])
+    tasks = {task["task_id"]: task for task in scene["macro_graph"]["tasks"]}
+    if (old not in tasks or target not in tasks
+            or old not in tasks[target]["depends_on"]
+            or field not in tasks[old]["outputs"]["typed_relation"]
+            or field not in tasks[target]["outputs"]["typed_relation"]
+            or not any(
+                node["op"] == "lookup_by_key"
+                and node["input_key_field"] == field
+                and node["source_key_field"] == field
+                for node in tasks[target]["operator_chain"]
+            )):
+        raise ValueError("invalid_public_handoff_contract")
+    result = deepcopy(scene)
+    for task in result["macro_graph"]["tasks"]:
+        if task["task_id"] == target:
+            task["history_handoff_parent_task_id"] = old
+            task["history_handoff_key_field"] = field
+    return result
+
+
 def handoff_disagreements(state) -> list[dict]:
     """Read only public cited Results, with a pre-existing keyed lookup contract."""
     conflicts = []

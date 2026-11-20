@@ -60,6 +60,7 @@ class ExecutionState:
         self.total_cost = 0
         self.invalidations: list[dict] = []
         self.revalidations: list[dict] = []
+        self._public_conflict_cache = None
 
     def _dependents(self, task_id: str) -> set[str]:
         affected, queue = set(), [task_id]
@@ -156,6 +157,8 @@ class ExecutionState:
         current = self.current.get(task_id)
         if current is None or current.product is None:
             return False
+        if task_id in self.contested_dependents():
+            return False
         if current.status in {"missing", "disputed", "stale"} or (
             current.runtime.get("report_fault_kind") == "report_missing"
         ):
@@ -193,6 +196,8 @@ class ExecutionState:
         return False
 
     def ready(self, task_id: str) -> bool:
+        if task_id in self.contested_dependents():
+            return False
         task = self.tasks[task_id]
         return all(
             self.usable(parent, required=self.required_parent_fields(
@@ -230,6 +235,7 @@ class ExecutionState:
         if task_id not in self.tasks:
             raise KeyError("unknown_runtime_macro")
         task = self.tasks[task_id]
+        self._public_conflict_cache = None
         if not self.ready(task_id):
             raise ValueError("execution_requires_valid_parent_fields:" + task_id)
         parents = [self.communicated_product(parent)
@@ -303,6 +309,7 @@ class ExecutionState:
                           round_number: int | None = None) -> None:
         if task_id not in self.current:
             raise ValueError("report_for_unexecuted_task")
+        self._public_conflict_cache = None
         self.public_reports[task_id] = report
         self.public_report_rounds[task_id] = (
             round_number if round_number is not None
@@ -924,7 +931,7 @@ class ExecutionState:
                 "older_round": conflict["older_round"],
                 "latest_round": conflict["latest_round"],
                 "history_pair_key": key,
-                "compared_parent_tasks": [old, target],
+                "compared_parent_tasks": [conflict["older_task"], conflict["latest_task"]],
                 "recheck_task_id": target,
                 "recheck_task_version": current.version,
                 "claim": {
@@ -1071,72 +1078,105 @@ class ExecutionState:
         # latest-vs-earlier contradiction, including same-source reports.
         self._detect_history_report_conflicts()
 
-    def unresolved_cited_conflicts(self) -> bool:
-        """After rechecking, do two PUBLIC independent claims still disagree?
+    def active_public_conflicts(self) -> list[dict]:
+        """Re-evaluate received claims; old diagnostic flags are not evidence.
 
-        A re-execution that returns exactly the same value is *not*
-        automatically a resolution. Neither source's hidden Gold is used.
+        The same witnesses govern scheduling and reward visibility. Neither
+        reporter is declared wrong and no clean answer is read.
         """
+        if not self.cross_source_checks_enabled:
+            return []
+        if self._public_conflict_cache is not None:
+            return self._public_conflict_cache
         from .scenario.history_conflicts import public_claims, same_query_disagreements
         from .scenario.prior_observation import comparison_rows
         from .scenario.handoff_conflicts import handoff_disagreements
-        remaining_prior = {
+        remaining = {
             (row["older_task"], row["latest_task"], row["attribute"])
             for row in (comparison_rows(self, require_visible_scope=False)
                         + handoff_disagreements(self)
                         + same_query_disagreements(self, require_latest=False))
         }
         claims = public_claims(self)
+        independent = self._explicit_report_claims()
+        active = []
         for event in self.detected_conflicts:
-            if event.get("kind") != "cross_round_report_disagreement":
+            kind = event.get("kind")
+            if kind not in {"cross_round_report_disagreement",
+                            "explicit_independent_claim_disagreement"}:
                 continue
             old, recent = event["compared_parent_tasks"]
-            if event.get("comparison_kind") in {
-                "earlier_source_lookup", "earlier_source_survey",
-                "earlier_keyed_handoff", "same_query_result_set",
-            }:
-                if (old, recent, event["claim"]["attribute"]) in remaining_prior:
-                    return True
-                continue
-            subject = event["claim"]["subject"]
-            field = event["claim"]["attribute"]
-            values = {}
-            for row in claims:
-                if (row["task_id"] in (old, recent)
-                        and row["subject"] == subject
-                        and row["attribute"] == field):
-                    values.setdefault(row["task_id"], set()).add(
-                        (type(row["value"]).__name__, repr(row["value"]))
-                    )
-            if (old not in values or recent not in values
-                    or values[old] != values[recent]):
-                return True
-        relevant = [
-            row for row in self.detected_conflicts
-            if row.get("kind") == "explicit_independent_claim_disagreement"
-        ]
-        if not relevant:
-            return False
-        claims = self._explicit_report_claims()
-        for event in relevant:
-            left, right = event["compared_parent_tasks"]
             wanted = event["claim"]
-            matching = {}
-            for claim in claims:
-                if (claim["task_id"] in (left, right)
-                        and all(claim[key] == value
-                                for key, value in (
-                                    ("subject", wanted["subject"]),
-                                    ("attribute", wanted["attribute"]),
-                                    ("valid_scope", wanted["valid_scope"]),
-                                ))):
-                    matching.setdefault(claim["task_id"], set()).add(
-                        (type(claim["value"]).__name__, repr(claim["value"]))
-                    )
-            if (left not in matching or right not in matching
-                    or matching[left] != matching[right]):
-                return True
-        return False
+            if kind == "cross_round_report_disagreement" and event.get(
+                "comparison_kind"
+            ) in {"earlier_source_lookup", "earlier_source_survey",
+                  "earlier_keyed_handoff", "same_query_result_set"}:
+                unresolved = (old, recent, wanted["attribute"]) in remaining
+            else:
+                source = independent if kind == "explicit_independent_claim_disagreement" else claims
+                values = {}
+                for row in source:
+                    if (row["task_id"] in (old, recent)
+                            and row["subject"] == wanted["subject"]
+                            and row["attribute"] == wanted["attribute"]
+                            and (kind != "explicit_independent_claim_disagreement"
+                                 or row["valid_scope"] == wanted["valid_scope"])):
+                        values.setdefault(row["task_id"], set()).add(
+                            (type(row["value"]).__name__, repr(row["value"]))
+                        )
+                # Losing a once-cited claim is not a verified resolution.
+                unresolved = old not in values or recent not in values or values[old] != values[recent]
+            if unresolved:
+                active.append(event)
+        self._public_conflict_cache = active
+        return active
+
+    def contested_dependents(self) -> set[str]:
+        """Pause both public claims' consumers until their disagreement clears.
+
+        A repeated-query task is often a DAG leaf. Its older counterpart is
+        not a leaf: checking only the clone's descendants permits wasted or
+        unsafe work on the contested original branch.
+        """
+        active = self.active_public_conflicts()
+        endpoints = {tid for event in active for tid in event["compared_parent_tasks"]}
+        return {
+            child for tid in endpoints for child in self._dependents(tid)
+        } - endpoints
+
+    def decision_dependents(self, task_id: str) -> set[str]:
+        """Dependencies for a current decision, including public recheck links."""
+        affected = self._dependents(task_id)
+        for event in self.active_public_conflicts():
+            if task_id in event["compared_parent_tasks"]:
+                for peer in event["compared_parent_tasks"]:
+                    affected.update(self._dependents(peer))
+        affected.discard(task_id)
+        return affected
+
+    def public_repair_issue(self, task_id: str) -> str | None:
+        issue = self.visible_discrepancy(task_id)
+        if issue:
+            return issue
+        current = self.current.get(task_id)
+        if current is None:
+            return None
+        for event in reversed(self.active_public_conflicts()):
+            if (event["recheck_task_id"] == task_id
+                    and event["recheck_task_version"] == current.version):
+                return (
+                    "The received reports disagree about "
+                    + event["claim"]["attribute"].replace("_", " ")
+                    + " for " + event["claim"]["subject"]
+                    + ": " + str(event["observed_values"][0])
+                    + " versus " + str(event["observed_values"][1])
+                    + ". Reconcile the cited observations before using their dependent results."
+                )
+        return None
+
+    def unresolved_cited_conflicts(self) -> bool:
+        self._public_conflict_cache = None
+        return bool(self.active_public_conflicts())
 
     def observable_issues(self) -> list[dict]:
         """Current decision's report-grounded anomalies, not fault labels.
@@ -1212,7 +1252,9 @@ class ExecutionState:
         return issues
 
     def scheduling_state(self) -> dict:
+        self._public_conflict_cache = None
         self._detect_explicit_cross_report_disagreements()
+        self._public_conflict_cache = None
         disputed = []
         for tid, item in self.current.items():
             discrepancy = self.visible_discrepancy(tid)

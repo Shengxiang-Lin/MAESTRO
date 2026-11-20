@@ -171,6 +171,7 @@ def _wrong_row(
 
 def _wrong_computation(
     step: dict, clean: Relation, *, variant_index: int = 0,
+    input_products: dict | None = None,
 ) -> tuple[Relation, dict] | None:
     """Corrupt ONE arithmetic output, not a source fact or upstream input.
 
@@ -181,7 +182,7 @@ def _wrong_computation(
     if step["op"] not in {
         "count", "group_count", "derive_percentage",
         "derive_arithmetic", "derive_date_gap", "goal_compute",
-    } or not clean.rows or variant_index > 1:
+    } or not clean.rows or variant_index > 3:
         return None
     # Only a *computed* output can be corrupted. In particular,
     # goal_compute may retain numeric source fields while producing a
@@ -201,17 +202,51 @@ def _wrong_computation(
         return None
     if field is None:
         return None
-    delta = 1 if variant_index == 0 else -1
-    rows = [{
-        "values": {**row["values"], field: row["values"][field] + delta},
-        "support": tuple(row["support"]),
-    } for row in clean.rows]
+    delta = 1 if variant_index == 0 else -1 if variant_index == 1 else None
+    mistake = "off_by_one"
+    rows = []
+    for row in clean.rows:
+        value = row["values"][field]
+        if delta is not None:
+            wrong = value + delta
+        else:
+            inputs = input_products or {}
+            relation = inputs.get((step.get("inputs") or [None])[0])
+            if relation is None or len(relation.rows) != 1:
+                return None
+            if step["op"] == "goal_compute":
+                spec = step.get("goal_operation", {})
+                function = spec.get("function")
+                fields = step.get("input_fields", [])[-2:]
+                digits = spec.get("round_digits", 0)
+            else:
+                function = step.get("operation")
+                fields = [step.get("left_field"), step.get("right_field")]
+                digits = step.get("round_digits", 0)
+            if len(fields) != 2:
+                return None
+            a, b = [relation.rows[0]["values"].get(f) for f in fields]
+            if any(type(x) not in {int, float} for x in (a, b)):
+                return None
+            if function == "ratio" and variant_index == 2 and a != 0:
+                wrong, mistake = round(b / a, digits), "swapped_ratio_operands"
+            elif function == "ratio" and variant_index == 3 and b != 0:
+                wrong, mistake = round(100 * a / b, digits), "ratio_percent_scale"
+            elif function == "absolute_difference" and variant_index == 2:
+                wrong, mistake = round(a + b, digits), "sum_instead_of_difference"
+            else:
+                return None
+            if wrong == value:
+                return None
+        rows.append({"values": {**row["values"], field: wrong},
+                     "support": tuple(row["support"])})
     mutated = Relation(clean.columns, tuple(rows))
     return mutated, {
         "primitive": step["id"], "kind": "miscomputed_numeric_output",
         "calculation_operation": step["op"],
         "calculation_field": field,
         "calculation_delta": delta,
+        "calculation_mistake": mistake,
         "source_fact_refs": sorted({
             ref for row in clean.rows for ref in row["support"]
         }),
@@ -517,6 +552,7 @@ def run_attempt(
         altered = (
             _wrong_computation(
                 step, relation, variant_index=fault.variant_index,
+                input_products=prefix,
             ) if fault.atom_kind == "computation_error"
             else _wrong_join(
                 step, prefix, relation, variant_index=fault.variant_index,

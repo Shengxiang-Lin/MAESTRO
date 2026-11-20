@@ -141,6 +141,12 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         else "not_observed"
     )
     unrepaired = audit.get("counterfactual_unrepaired") or {}
+    answer_impact = (
+        "answer_changing" if unrepaired.get("correct") is False and unrepaired.get("status") == "completed"
+        else "consistency_only" if unrepaired.get("correct") is True
+        else "completion_blocked" if unrepaired.get("status") and unrepaired.get("status") != "completed"
+        else "not_evaluated"
+    )
     replay_outcome = audit.get("execution_outcome") or journal.get("status")
     if replay_outcome == "recovered":
         if (unrepaired.get("status") == "completed"
@@ -261,6 +267,7 @@ def classify_trial(plan: dict, journal: dict) -> dict:
         "history_conflict_older_rounds": older_rounds,
         "history_conflict_round_gaps": round_gaps,
         "recovery_effect": recovery_effect,
+        "answer_impact": answer_impact,
         "first_visible_issue_round": first_visible_issue_round,
         "visible_issue_types": visible_issue_types,
         "visible_conflicts": len(conflicts),
@@ -382,6 +389,7 @@ def select_recovered_candidates(
             effects = Counter(row["recovery_effect"] for row in choices)
             policies = Counter(row["policy_signature"] for row in choices)
             choices.sort(key=lambda row: (
+                row.get("answer_impact") == "consistency_only",
                 effects[row["recovery_effect"]],
                 policies[row["policy_signature"]],
                 -row["actual_invalidations"],
@@ -496,6 +504,9 @@ def select_recovered_candidates(
     )
     stats = {
         "target_main_turns": target_main_turns,
+        "selected_answer_impact_distribution": dict(Counter(
+            row["answer_impact"] for row in rows if row["candidate_index"] in selected
+        )),
         "fault_kind_execution_outcomes": {
             kind: dict(sorted(Counter(
                 row["execution_outcome"] for row in rows

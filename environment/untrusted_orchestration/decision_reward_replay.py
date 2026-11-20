@@ -41,6 +41,8 @@ def _rehydrate(state, task_id, report, round_number, audit, positions):
     # was created. Recompute them using only current public reports.
     runtime.pop("visible_issue", None)
     runtime.pop("cross_source_recheck_requested", None)
+    runtime.pop("history_conflict_recheck_requested", None)
+    state._public_conflict_cache = None
     original_status = runtime.get("status")
     if original_status not in {"done", "missing", "partial", "disputed"}:
         raise ValueError("audited original status missing/unknown")
@@ -94,6 +96,8 @@ def replay_reward_states(scene, episode, audit, *,
         d["round"]: d for d in audit["decision_audit"]
         if d.get("decision_kind") in {"delegate", "complete"}
     }
+    from .scenario.handoff_conflicts import restore_handoff_contract
+    scene = restore_handoff_contract(scene, audit.get("history_conflict_anchor"))
     graph = scene["macro_graph"]
     state = ExecutionState(scene, reviewed_reports={})
     positions = {}

@@ -145,7 +145,7 @@ def enumerate_round_candidates(
             elif max_distractors is not None:
                 variants = max_distractors
             elif kind == "computation_error":
-                variants = 2
+                variants = 4
             else:
                 # Exhaust finite *real* alternatives from already granted
                 # observations and upstream products. More source records

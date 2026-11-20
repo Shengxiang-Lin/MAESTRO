@@ -253,3 +253,33 @@ dispatch; no early clean-answer reuse; same-source discrepancies not
 counted as independent votes; bounded two-sided retries; actual
 invalidated versions; non-recomputed consumers failing publication;
 unchanged Stage 1–3 contracts; and no future/private data in O1 inputs.
+
+## Public conflict dependency and reward consistency
+
+Stage 4 pauses downstream consumers of both publicly conflicting reports,
+including consumers of an original query when its recheck is a DAG leaf.
+Independent evidence tasks remain eligible for parallel dispatch. A repair is
+scorable only when current delivered reports contain the discrepancy;
+stale private diagnostic flags cannot justify it.
+
+Strict reward replay restores an earlier keyed-handoff contract from its
+recorded task relationship and checks the actually delivered claims again.
+Replay removes later history-conflict flags from logged attempts.
+Two-sided rechecks retain the original pair of conflicting tasks.
+
+Current assignments name their calculation inputs and operations. Stage 4C
+checks high-confidence mismatches between reasoning and those instructions,
+including date-pair versus observation-date extrema and source-free work
+described as new external acquisition. Report prose normalization preserves
+all executor-owned Result values and citations.
+
+Candidate audits distinguish answer_changing, completion_blocked and
+consistency_only using the private unrepaired continuation. Under a global
+language budget, consistency-only repairs follow answer-changing or blocking
+cases within the same fault kind; they remain valid consistency exercises.
+Computation variants also include swapped ratio operands, ratio/percent scale
+confusion and sum/difference confusion when an executable node supports them.
+
+Use a new output directory for regeneration; older accepted trajectories are
+not silently reclassified under the updated scheduling policy. This change
+is contained in Stage 4 and consumes frozen Stage 1-3 artifacts.

@@ -10,6 +10,7 @@ from copy import deepcopy
 import re
 
 from environment.base_orchestration.action_author import _assignment
+from ..orchestration.reasoning_fidelity import derivation_instructions
 
 
 _IDENT = re.compile(r"\b(?:KEY[12]-\d+|MK-\d+|RK-\d+|Case-\d+|Entry-\d+)\b", re.I)
@@ -48,8 +49,7 @@ def evidence_request(state, task_id: str, *, round_number: int,
     """
     task = state.tasks[task_id]
     previous = state.current.get(task_id)
-    issue = (state.visible_discrepancy(task_id)
-             or previous.runtime.get("visible_issue")) if previous else None
+    issue = state.public_repair_issue(task_id) if previous else None
     target = list(task["outputs"]["typed_relation"])
     required = _required_fields(state, task)
     missing = []
@@ -236,6 +236,7 @@ def evidence_assignment(state, task_id: str, *, catalog: dict,
     )
     base["target_instruction"] = (
         objective + " " + focus + ". "
+        + " ".join(derivation_instructions(task)) + " "
         + base["target_instruction"]
     )[:1500]
     base["context"] = (
@@ -319,7 +320,7 @@ def schedule_evidence_requests(state, *, repairs: list[str],
     # overturn an earlier correctness-critical verification/repair class.
     ranked = sorted(candidates, key=lambda tid: (
         priority.get(goals[tid]["operation"], 99),
-        -len(state._dependents(tid)),
+        -len(state.decision_dependents(tid)),
         -len(goals[tid]["target_fields"]),
         order[tid],
     ))
@@ -332,12 +333,12 @@ def schedule_evidence_requests(state, *, repairs: list[str],
             continue
         # Two tasks can share a round only when neither has a causal
         # dependency on the other's *new* evidence.
-        if any(tid in state._dependents(rep) for rep in repair_set
+        if any(tid in state.decision_dependents(rep) for rep in repair_set
                if rep != tid):
             continue
         if any(
-            tid in state._dependents(other)
-            or other in state._dependents(tid)
+            tid in state.decision_dependents(other)
+            or other in state.decision_dependents(tid)
             for other in selected
         ):
             continue

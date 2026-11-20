@@ -23,17 +23,28 @@ def sanitize_public_prose(value: str) -> str:
     )
 
 
+def sanitize_report_narration(value: str) -> str:
+    """Normalize framework prose, preserving all Result values and citations."""
+    value = sanitize_public_prose(value)
+    value = re.sub(r"\bWorkProduct\b", "returned findings", value, flags=re.I)
+    return re.sub(r"\bSet of evidence\b", "evidence", value, flags=re.I)
+
+
 def sanitize_public_report(report: dict) -> dict:
     """Return a copy with only Main-facing prose fields normalized."""
     result = deepcopy(report)
     for field in ("trace_summary", "task_instruction"):
         if isinstance(result.get(field), str):
-            result[field] = sanitize_public_prose(result[field])
+            result[field] = (sanitize_report_narration(result[field])
+                             if field == "trace_summary"
+                             else sanitize_public_prose(result[field]))
     finish = result.get("finish_result")
     if isinstance(finish, dict):
         for field in ("result", "summary"):
             if isinstance(finish.get(field), str):
-                finish[field] = sanitize_public_prose(finish[field])
+                finish[field] = (sanitize_report_narration(finish[field])
+                                 if field == "summary"
+                                 else sanitize_public_prose(finish[field]))
     return result
 
 

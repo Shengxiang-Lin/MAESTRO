@@ -19,7 +19,7 @@ from .report_contract import (
     build_report_contract, render_delivered_result,
 )
 from .report_validation import validate_report_draft
-from .public_language import sanitize_public_prose
+from .public_language import sanitize_public_prose, sanitize_report_narration
 from ..state_machine import deterministic_report, Attempt
 
 _AUTHOR_SYSTEM = """Naturalize a Sub-Agent's executed evidence into concise
@@ -48,7 +48,7 @@ Rules:
 - The program will insert mandatory factual clauses and will render the
   final result from delivered rows. Treat authored text as natural phrasing,
   not as permission to add or correct values.
-- No invented source, operation, number, date, causal explanation or
+- Use ordinary specialist language. Do not repeat framework terms such as\n  WorkProduct, Set of evidence, fact_spine or execution status. Describe\n  concrete observations and delivery limitations in plain language.\n- No invented source, operation, number, date, causal explanation or
   outside website/media/tool access. Avoid counting FactRefs in prose; if
   essential, use only the exact number of unique cited FactRefs actually
   delivered in Result. Do not mention hidden Gold, teacher,
@@ -69,6 +69,13 @@ A report may accurately state 'the attempt returned X' without claiming
 'X was independently verified correct'. When earlier observed values
 conflict with later delivered values, BOTH facts can be reported; no hidden
 cause or correct replacement can be inferred.
+
+An executed_work_witness records the actual operands or actual left/right
+keys used by the attempt. Different paired keys can be an observed failed
+association. A projected Result retaining just one key does not erase the
+earlier input binding. Do not demand that those witnessed keys be equal,
+or replace an actually reported wrong number with its correct calculation.
+These facts do not justify invented causes or extra claims of verification.
 
 Evaluate:
 grounded: No UNSUPPORTED additional fact or cause is asserted.
@@ -233,6 +240,10 @@ def naturalize_report(task: dict, attempt: Attempt, *,
         ),
     )
     failures = []
+    executed_work_witnesses = [
+        check for step in contract["observed_operator_steps"]
+        for check in step.get("public_work_checks", [])
+    ]
     witness_review_attempted = False
     for revision in range(max_revisions + 1):
         request = {
@@ -271,7 +282,8 @@ def naturalize_report(task: dict, attempt: Attempt, *,
                         lambda m: m.group(1) + " source", revised,
                         flags=re.I,
                     )
-                    candidate[field] = sanitize_public_prose(revised)
+                    candidate[field] = (sanitize_public_prose(revised) if field == "result"
+                                        else sanitize_report_narration(revised))
             candidate, result_normalized = _prepare_result(
                 candidate, attempt, contract,
             )
@@ -318,6 +330,7 @@ def naturalize_report(task: dict, attempt: Attempt, *,
                 json.dumps({
                     "observed_current_attempt": contract,
                     "locked_fact_spine": contract["fact_spine"],
+                    "executed_work_witnesses": executed_work_witnesses,
                     "candidate_main_facing_report": {
                         "result": result,
                         "summary": candidate["summary"],
@@ -336,8 +349,9 @@ def naturalize_report(task: dict, attempt: Attempt, *,
         # rewrite the result just because the first critique appears wrong.
         scope_rereviewed = False
         witness_rereviewed = bool(
-            contract["observed_handoff_discrepancies"]
-            and _review_denies_witnessed_handoff(decision)
+            (contract["observed_handoff_discrepancies"] or executed_work_witnesses)
+            and (_review_denies_witnessed_handoff(decision)
+                 or _review_confuses_intermediate_and_delivery(decision))
         )
         if (_review_confuses_intermediate_and_delivery(decision)
                 or witness_rereviewed):
@@ -358,12 +372,18 @@ def naturalize_report(task: dict, attempt: Attempt, *,
                         "executed step snapshots: if listed, do not deny "
                         "those specific identity differences. They do "
                         "not justify a claimed cause or clean answer. "
+                        "executed_work_witnesses separately records actual input "
+                        "bindings and arithmetic operands. A wrong association "
+                        "can pair unequal keys even when the projected final "
+                        "Result contains only one identifier. Preserve that "
+                        "observed pairing; it is not an invented discrepancy. "
                         "If the summary invents a successful match or "
                         "operation, still FAIL. Do not auto-pass.\n"
                     ),
                     json.dumps({
                         "observed_current_attempt": contract,
                         "locked_fact_spine": contract["fact_spine"],
+                    "executed_work_witnesses": executed_work_witnesses,
                         "candidate_main_facing_report": {
                             "result": result,
                             "summary": candidate["summary"],

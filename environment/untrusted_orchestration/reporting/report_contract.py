@@ -124,7 +124,7 @@ def _fact_spine(contract: dict) -> dict:
         if fields:
             mandatory.append(
                 "The final handoff is partial; these fields are "
-                "unavailable or incomplete in the delivered WorkProduct: "
+                "unavailable or incomplete in the delivered findings: "
                 + ", ".join(x.replace("_", " ") for x in fields) + "."
             )
         elif not contract["rows_complete"]:
