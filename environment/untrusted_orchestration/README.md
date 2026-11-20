@@ -74,6 +74,48 @@ For audit, `summary.json` exposes
 availability, visible evidence, execution recovery and actual published
 coverage.
 
+## Reporting modules and stable metrics
+
+Stage 4's report package is organized by **responsibility** rather than
+repeating `report_` in every filename:
+
+| Module | Responsibility |
+| --- | --- |
+| `reporting/author.py` | 4B LLM Author/Critic and approved narrative |
+| `reporting/contract.py` | Source-grounded delivery/step contract, including complete-step handoff witnesses |
+| `reporting/validation.py` | Pure draft fidelity checks and rejection reasons |
+| `reporting/faults.py` | Explicitly controlled report-only perturbations (not normal authoring) |
+| `reporting/surface.py` | Lossless Result encoding/decoding and public prose sanitization |
+| `reporting/work_evidence.py` | Public calculation/association statements and text-only checks |
+
+The former tiny `report_evidence.py` and `public_language.py` modules
+are merged into their owning modules. The superseded `report_*.py`
+files and their unused compatibility imports are removed. No
+LLM prompts, report schema, fault executor, or reward scoring rules are
+intentionally changed by this package refactor.
+
+`summary.json` uses **canonical** quantities:
+`candidate_trials` (all 4A trials),
+`rounds_extracted_from_base` (feedback rounds),
+`candidates_selected_for_language_review` and
+`candidates_filtered_before_llm` (language-review selection),
+`recovered` / `published_episodes` (accepted Episodes),
+`main_training_turns` (published post-fork Main decisions),
+`decision_reward_states` / `decision_reward_unscorable`
+(reward coverage), and
+`publication_generation_process_leaks` (one leak audit).
+
+Removed aliases: `requested_branches`, `requested_feedback_rounds`,
+`reviewed_branches`, `reviewed_turns`,
+`screened_out_before_llm`, and `publication_surface_leaks`.
+The constant `candidate_backfill_diversity` string and hard-coded
+`limitations` list are also removed from each summary: explanation
+belongs in this README, not in a numeric run report. These changes do
+**not** remove source-backed detailed counters (fault distribution,
+cross-round conflicts, report review failures, replay failures) or
+private per-case audit files. Compare old and new summaries using the
+canonical quantities when reviewing previous pilot results.
+
 ## Ten-question official LLM language pilot (1,000 Main turns)
 
 Use the isolated `environment/configs/untrusted_orchestration_llm_pilot_10.yaml`
