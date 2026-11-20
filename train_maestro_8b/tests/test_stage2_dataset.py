@@ -152,5 +152,98 @@ class Stage2CanonicalPreparationTests(unittest.TestCase):
             self.assertFalse(output.exists())
 
 
+    def test_parquet_round_trip_from_audited_unified_files(self):
+        """Real canonical JSONL -> GRPO Parquet -> private state join."""
+        import json
+        import pyarrow.parquet as pq
+        from environment.data_export.source_io import digest
+        from train_maestro_8b.policy.grpo_runtime import load_dataset_rows
+        from train_maestro_8b.policy.trl_reward_adapter import (
+            load_private_states, select_scorable_rows,
+        )
+
+        scenes = ["scene_A", "scene_B", "scene_C", "scene_D"]
+        decisions = [decision(scene, 2) for scene in scenes]
+        labels = [teacher(row) for row in decisions]
+        cases = []
+        for row in decisions:
+            scene = row["scene_id"]
+            cases.append({
+                "case_id": "clean:" + scene, "scene_id": scene, "kind": "clean",
+            })
+            cases.append({
+                "case_id": row["case_id"], "scene_id": scene,
+                "kind": "fault_injected",
+                "recovery": {"globally_recovered": True},
+                "fault": {"atoms": [{"kind": "fabricated_claim"}]},
+            })
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "unified"
+            (base / "private").mkdir(parents=True)
+            for name, items in (
+                ("cases.jsonl", cases),
+                ("decisions.jsonl", decisions),
+                ("private/decision_labels.jsonl", labels),
+            ):
+                (base / name).write_text(
+                    "".join(json.dumps(item) + "\n" for item in items),
+                    encoding="utf-8",
+                )
+            scene_path = root / "scenes.jsonl"
+            scene_path.write_text('{"version":"test"}\n', encoding="utf-8")
+            stage4_manifest = root / "stage4_manifest.json"
+            stage4_manifest.write_text('{"version":"test"}\n', encoding="utf-8")
+            claim_states = root / "claim_states.jsonl"
+            claim_states.write_text("", encoding="utf-8")
+            source_manifest = {
+                "schema": "maestro.dataset.v1",
+                "base_file_sha256": {
+                    name: digest(base / name)
+                    for name in (
+                        "cases.jsonl", "decisions.jsonl",
+                        "private/decision_labels.jsonl",
+                    )
+                },
+                "source_sha256": {
+                    "scenes": digest(scene_path),
+                    "stage4_manifest": digest(stage4_manifest),
+                },
+            }
+            (base / "manifest.json").write_text(
+                json.dumps(source_manifest), encoding="utf-8",
+            )
+            output = root / "prepared"
+            arguments = {
+                "source_dir": base, "output_dir": output,
+                "reward_mode": "global",
+                "scenes_file": scene_path,
+                "stage4_manifest": stage4_manifest,
+                "claim_states": claim_states,
+            }
+            summary = prepare(**arguments)
+            self.assertEqual(sum(summary["counts"].values()), 4)
+            self.assertEqual(summary["private_state_rows"], 4)
+            self.assertTrue(all(
+                pq.read_metadata(output / (part + ".parquet")).num_rows ==
+                summary["counts"][part]
+                for part in ("train", "val", "test")
+            ))
+            private = load_private_states(
+                output / "private/decision_reward_states.jsonl"
+            )
+            converted = load_dataset_rows(output / "train.parquet")
+            compatible, report = select_scorable_rows(converted, private)
+            self.assertEqual(len(compatible), summary["counts"]["train"])
+            self.assertEqual(report["excluded"], {})
+            self.assertTrue(prepare(**arguments, reuse_if_unchanged=True)["reused"])
+            with self.assertRaisesRegex(FileExistsError, "different recipe"):
+                prepare(**arguments, include_fallback=True)
+            with (base / "decisions.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write('{"corrupted":true}\n')
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                prepare(**arguments, dry_run=True)
+
+
 if __name__ == "__main__":
     unittest.main()
