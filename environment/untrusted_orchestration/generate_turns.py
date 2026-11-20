@@ -32,6 +32,7 @@ from environment.base_orchestration.trajectory_builder import (
 from .offline_pipeline import author_branch_reports, author_branch_main
 from .trusted_prefix import compile_trusted_prefixes
 from .publication import _publish
+from .inspection.publication_guard import review_turn_surface
 from .storage import _atomic_json, _atomic_jsonl
 from .scenario.candidate_exploration import expand_all_rounds
 from .scenario.candidate_selection import select_recovered_candidates
