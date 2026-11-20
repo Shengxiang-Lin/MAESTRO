@@ -26,7 +26,10 @@ from .reporting.author import naturalize_report
 from .scenario.prior_observation import patch_scene as patch_prior_observation_scene
 from .scenario.same_source_recheck import patch_scene as patch_same_source_recheck_scene
 from .reporting.surface import sanitize_public_report
-from environment.untrusted_orchestration.orchestration.reasoning_fidelity import reasoning_evidence_issues, reasoning_action_issues
+from environment.untrusted_orchestration.orchestration.reasoning_fidelity import (
+    reasoning_evidence_issues, reasoning_action_issues,
+    reasoning_source_attribution_issues,
+)
 from environment.untrusted_orchestration.inspection.visible_history import visible_history_reasoning_issues
 from environment.untrusted_orchestration.orchestration.main_decision_contract import (
     build_main_decision_contract, critic_denies_confirmed_conflict, repeated_query_conflicts,
@@ -483,6 +486,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                         )
                         + visible_history_reasoning_issues(
                             text, decision_contract["prior_field_activity"])
+                        + reasoning_source_attribution_issues(text, entries)
                     )
                     if problems:
                         guard_drafts.append({"reasoning": text, "issues": list(problems)})
