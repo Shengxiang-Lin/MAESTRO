@@ -23,11 +23,11 @@ Claims from the current/future round are rejected.
 
 ```bash
 python -m environment.data_export.private_context \
-  --unified-dir environment/data/unified \
-  --scenes PATH/TO/ORIGINAL/stage1/questions/scenes.jsonl \
-  --stage4-dir PATH/TO/ORIGINAL/stage4
+  --unified-dir environment/data/unified
 ```
 
+The default command automatically discovers SHA256-matched original Stage1/4 files under `environment/data/` (override with `--discover-root`).
+You can alternatively pass both `--scenes` and `--stage4-dir` explicitly.
 The one-time upgrade checks the original Stage1 Scene file and Stage4
 manifest AND main_turns hashes from `unified/manifest.json`.
 If they no longer match, do not bypass this check: recover the exact

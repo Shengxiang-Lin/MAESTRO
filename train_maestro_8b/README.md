@@ -7,7 +7,7 @@ immutable hashes checked again at training/preflight. Stage1/4
 generation folders are no longer inputs to the Global Judge.
 
 To upgrade an older unified dataset without rebuilding decisions, run
-`python -m environment.data_export.private_context` using its original
+`python -m environment.data_export.private_context --unified-dir environment/data/unified` (automatically finds its original hash-matched sources) using its original
 hash-matched Stage1/Stage4 inputs. See `run/README.md` for commands.
 
 ---
