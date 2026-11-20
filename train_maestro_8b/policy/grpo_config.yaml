@@ -9,7 +9,7 @@ paths:
 
 judge:
   registry: config/model_config.yaml
-  model: qwen3.7-flash
+  model: deepseek-v4.1-flash-1017
   api_key_env: DASHSCOPE_API_KEY
   enable_thinking: false
   workers: 4
