@@ -76,6 +76,27 @@ def reasoning_evidence_issues(
     # The current action must motivate the very check being delegated.
     if not _UNCERTAIN.search(reasoning):
         return ["missing_current_conflict_or_verification_motivation"]
+    # A directly observed Result/Summary mismatch has an exact public
+    # attribute. A generic "there is a conflict" is not enough to
+    # explain a single focused verification; accept both code-field and
+    # natural spaced spellings. Do not impose this on broad or multi-focus
+    # rounds, nor on less directly parseable cross-report disagreements.
+    direct = {
+        focus["attribute"]
+        for item in verify
+        for focus in [item.get("verification_focus")]
+        if isinstance(focus, dict)
+        and focus.get("basis") == "result_summary_disagreement"
+        and isinstance(focus.get("attribute"), str)
+    }
+    if len(direct) == 1:
+        field = next(iter(direct))
+        spelling = field.replace("_", " ")
+        if not any(re.search(
+            r"(?<!\w)" + re.escape(name) + r"(?!\w)",
+            reasoning, re.I,
+        ) for name in (field, spelling)):
+            return ["missing_specific_verification_focus:" + field]
     for phrase in re.split(r"(?<=[.!?])\s+", reasoning):
         if not any(pattern.search(phrase) for pattern in _FALSE_FINALITY):
             continue
