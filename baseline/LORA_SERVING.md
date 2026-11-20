@@ -59,8 +59,8 @@ running compatible vLLM endpoint is reused but not killed.
 The launchers set local model and adapter paths automatically:
 
 ```bash
-bash baseline/orchestra-o1/bench_qwen/run_da_sft_lora.sh --tasks 1
-bash baseline/orchestra-o1/bench_qwen/run_da_grpo_lora.sh --tasks 1
+bash baseline/orchestra-o1/bench_qwen/run_da_sft_lora.sh --tasks 5
+bash baseline/orchestra-o1/bench_qwen/run_da_grpo_lora.sh --tasks 5
 ```
 
 `--tasks` selects specific benchmark task IDs (not dataset row numbers);
