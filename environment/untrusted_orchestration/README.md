@@ -88,6 +88,12 @@ repeating `report_` in every filename:
 | `reporting/surface.py` | Lossless Result encoding/decoding and public prose sanitization |
 | `reporting/work_evidence.py` | Public calculation/association statements and text-only checks |
 
+At the Stage 4 root, `generate_turns.py` now owns 4A execution,
+candidate selection and the 4B/4C work queue; `publication.py` owns
+journal-to-Episode acceptance and quality metrics; `storage.py`
+owns atomic JSON/JSONL writes shared by those two stages. This keeps
+publication bookkeeping out of the simulation entrypoint.
+
 The former tiny `report_evidence.py` and `public_language.py` modules
 are merged into their owning modules. The superseded `report_*.py`
 files and their unused compatibility imports are removed. No
