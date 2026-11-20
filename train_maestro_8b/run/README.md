@@ -71,6 +71,25 @@ training:
   gradient_accumulation_steps: 8
 ```
 
+### Optional: swap rollout and training cards for GPU-specific diagnostics
+
+When one physical card works for vLLM but the other fails, the configuration
+supports swapping roles without changing the learner or dataset:
+
+```yaml
+distributed:
+  train_gpus: 1
+  rollout_gpu: 1
+  train_gpu_start: 0
+```
+
+This launches vLLM on GPU 1 and torchrun training on GPU 0. Stop any existing
+GPU 1 test server, then start `serve-vllm` and run `pilot` as usual.
+**Only use this after confirming the same full vLLM server flags work on GPU 1.**
+A GPU that fails vLLM may also fail backward; a successful serve smoke test
+does not prove the swapped GRPO pilot will train safely. Preserve existing
+checkpoints and use a fresh pilot output directory when re-testing.
+
 `train_gpus: 1` means physical GPU 0 serves vLLM and GPU 1 trains.
 For four GPUs change **only** `train_gpus: 3`: GPU 0 stays rollout-only
 and GPUs 1,2,3 become three DDP training ranks. The global batch is
