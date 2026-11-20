@@ -170,6 +170,11 @@ or that completion is justified merely because a later calculation finished.
 Judge any additional claims of truth or verification independently.
 For a pending verification, re-inspecting the assigned source to determine
 which reported value it supports IS a valid way to reconcile the disagreement.
+For an explicit public arithmetic mismatch, directly recomputing the named
+operands is also a valid verification motivation: a correct statement such as
+"recompute 319 / 80" does not need to include the literal word "verify".
+Still check the operands, operation and result against PUBLIC returned values,
+and do not mistake an unperformed recalculation for a completed check.
 Do not reject faithful reasoning merely for saying verify rather than reconcile,
 or speculate that an inconsistent source makes the assigned check impossible.
 The contract validates delegation legality, not the factual correctness of
