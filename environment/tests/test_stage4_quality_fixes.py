@@ -64,6 +64,24 @@ class ReportClaimComparisonTests(unittest.TestCase):
         )
         self.assertEqual(report_claim_conflicts(handoff), [])
 
+    def test_record_scoped_fault_is_visible_to_claim_state(self):
+        from environment.untrusted_orchestration.inspection.visible_claim_extraction import (
+            extract_visible_claims,
+        )
+        handoff = report(
+            [{"case_id": "Case-001", "score": 4},
+             {"case_id": "Case-002", "score": 8}],
+            "The summary records Record 2: score = 9.",
+        )
+        claims, meta = extract_visible_claims(
+            handoff, output_fields=["case_id", "score"], source_id="src",
+        )
+        summary = [c for c in claims if c["surface"] == "summary"]
+        self.assertEqual(len(summary), 1)
+        self.assertEqual(summary[0]["subject"], "Case-002")
+        self.assertEqual(summary[0]["value"], 9)
+        self.assertTrue(meta["parsed"])
+
     def test_critic_and_runtime_share_identical_public_witness(self):
         handoff = report([{"latitude_a": 46.653836}],
                          "summary records latitude a = 46.123456.")
