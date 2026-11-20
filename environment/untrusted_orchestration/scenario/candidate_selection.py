@@ -429,8 +429,8 @@ def select_recovered_candidates(
                     turns = row["decision_rounds_post_fork"]
                     if not 0 < turns <= remaining:
                         continue
-                    if row["answer_impact"] == "not_evaluated":
-                        continue
+                    # Old audited fixtures may lack an unrepaired label:
+                    # rank these last, never invent an outcome.
                     # Ordinary consistency-only repairs are useful once per
                     # distinct abstract policy/fault/effect. Late conflict
                     # or real invalidation examples remain valuable even
