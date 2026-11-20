@@ -42,8 +42,10 @@ def build_stage2_config(args):
     cfg["training"]["logging_steps"] = args.logging_steps
     cfg["rollout"]["temperature"] = args.temperature
     cfg["rollout"]["num_generations"] = args.num_generations
-    cfg["training"]["per_device_train_batch_size"] = getattr(args, "micro_batch_size", 1)
-    cfg["training"]["gradient_accumulation_steps"] = args.gradient_accumulation_steps
+    if getattr(args, "micro_batch_size", None) is not None:
+        cfg["training"]["per_device_train_batch_size"] = args.micro_batch_size
+    if args.gradient_accumulation_steps is not None:
+        cfg["training"]["gradient_accumulation_steps"] = args.gradient_accumulation_steps
     cfg["rollout"]["max_prompt_tokens"] = args.max_length
     cfg["rollout"]["max_completion_tokens"] = args.max_new_tokens
     cfg["rollout"]["max_num_seqs"] = max(
@@ -66,7 +68,7 @@ def build_stage2_config(args):
     if (args.max_length + args.max_new_tokens > cfg["model"]["max_seq_length"]
             or args.max_length < 1 or args.max_new_tokens < 1):
         raise ValueError("Stage2 prompt+generation exceeds Qwen3 context")
-    if args.num_generations < 2 or args.gradient_accumulation_steps < 1 or getattr(args, "micro_batch_size", 1) < 1:
+    if args.num_generations < 2 or cfg["training"]["gradient_accumulation_steps"] < 1 or cfg["training"]["per_device_train_batch_size"] < 1:
         raise ValueError("DA GRPO requires >=2 candidates and >=1 prompt group")
     if (args.epochs <= 0 or args.max_steps == 0 or args.lr <= 0
             or args.max_grad_norm <= 0 or args.weight_decay < 0
@@ -376,9 +378,9 @@ def main(argv=None):
     p.add_argument("--epochs", type=float, default=3.0)
     p.add_argument("--max_steps", type=int, default=-1)
     p.add_argument("--num_generations", type=int, default=8)
-    p.add_argument("--gradient_accumulation_steps", type=int, default=8,
+    p.add_argument("--gradient_accumulation_steps", type=int, default=None,
                    help="Actual optimizer gradient accumulation steps, per training GPU")
-    p.add_argument("--micro_batch_size", type=int, default=1,
+    p.add_argument("--micro_batch_size", type=int, default=None,
                    help="Completion micro-batch per training GPU")
     p.add_argument("--max_length", type=int, default=12288)
     p.add_argument("--max_new_tokens", type=int, default=4096)
