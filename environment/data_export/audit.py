@@ -1,290 +1,245 @@
-"""Deterministic quality audit for unified MAESTRO Main-decision adapters.
+"""Base MAESTRO dataset integrity audit (no baseline split or Parquet policy).
 
-Checks Scene-level isolation and the *actual* SFT prompt/completion contract.
-Reports hash-only duplicate/conflict examples; never logs original prompts,
-gold labels or private fault/teacher state.
+Audits only the method-independent Case, Main decision and private label
+contract. Repeated prompt/label observations are descriptive; baselines may
+choose different deduplication or weighting policies.
 """
 from __future__ import annotations
 
-import argparse
 from collections import Counter, defaultdict
 from hashlib import sha256
 import json
 from pathlib import Path
 from statistics import median
 
-SPLITS = ("train", "val", "test")
-SCHEMA = "maestro.data_quality.v1"
-REVIEWED_MODES = {
-    "llm_reviewed", "llm_reviewed_completion",
-    "llm_reviewed_contract_frozen",
-}
+from .source_io import digest, read_jsonl
+
+SCHEMA = "maestro.base_quality.v1"
 
 
-def _require(test, reason):
-    if not test:
-        raise ValueError("data_quality:" + reason)
+def _check(ok: bool, reason: str) -> None:
+    if not ok:
+        raise ValueError("base_data_quality:" + reason)
 
 
-def _digest(value: str) -> str:
+def _hash(value: str) -> str:
     return sha256(value.encode("utf-8")).hexdigest()
 
 
-def _action_key(action: dict) -> str:
-    return _digest(json.dumps(action, sort_keys=True, ensure_ascii=False))
+def _action_hash(value: dict) -> str:
+    return _hash(json.dumps(value, ensure_ascii=False, sort_keys=True))
 
 
-def _check_action(action, name):
-    _require(isinstance(action, dict) and
-             set(action) == {"action", "reasoning", "params"}, name + ":action_schema")
-    _require(action["action"] in {"delegate_task", "complete"}, name + ":action_type")
-    _require(isinstance(action["reasoning"], str) and
-             bool(action["reasoning"].strip()), name + ":reasoning")
+def _validate_action(action: dict, identity: str) -> None:
+    _check(isinstance(action, dict) and
+           set(action) == {"action", "reasoning", "params"},
+           "action_fields:" + identity)
+    _check(action["action"] in {"delegate_task", "complete"},
+           "action_type:" + identity)
+    _check(isinstance(action["reasoning"], str) and
+           bool(action["reasoning"].strip()), "reasoning:" + identity)
     params = action["params"]
-    _require(isinstance(params, dict), name + ":params")
+    _check(isinstance(params, dict), "action_params:" + identity)
     if action["action"] == "delegate_task":
-        _require(isinstance(params.get("tasks"), list) and
-                 bool(params["tasks"]), name + ":delegated_tasks")
+        tasks = params.get("tasks")
+        _check(isinstance(tasks, list) and bool(tasks),
+               "delegate_tasks:" + identity)
     else:
-        _require(isinstance(params.get("answer"), str), name + ":answer")
+        _check(isinstance(params.get("answer"), str),
+               "complete_answer:" + identity)
 
 
 def audit_dataset(cases: list[dict], decisions: list[dict],
-                  sft_rows: list[tuple[str, dict]], scene_to_split: dict,
-                  *, strict_conflicts: bool = False) -> dict:
-    """Validate pairing and return reproducible, non-sensitive diagnostics.
-
-    sft_rows must follow decisions in order and contain (split, adapter row).
-    Diagnostics count duplicates; they do not reweight, drop or rewrite labels.
-    """
-    _require(isinstance(scene_to_split, dict) and bool(scene_to_split),
-             "missing_scene_split_map")
-    _require(set(scene_to_split.values()) <= set(SPLITS),
-             "invalid_scene_split")
-    _require(len(decisions) == len(sft_rows), "sft_decision_row_count_mismatch")
-
-    case_index = {}
-    clean_ids = set()
-    fault_cases = Counter()
+                  labels: list[dict]) -> dict:
+    """Raise for integrity/privacy boundary violations; report distributions."""
+    _check(len(decisions) == len(labels), "decision_teacher_count_mismatch")
+    case_by_id = {}
+    scenes = set()
+    recovered = set()
+    cases_by_kind, fault_by_kind = Counter(), Counter()
     for case in cases:
-        cid, scene = case.get("case_id"), case.get("scene_id")
-        _require(isinstance(cid, str) and cid and cid not in case_index,
-                 "duplicate_or_missing_case_id")
-        _require(scene in scene_to_split and
-                 case.get("split") == scene_to_split[scene],
-                 "case_scene_split_mismatch:" + cid)
+        identity, scene = case.get("case_id"), case.get("scene_id")
+        _check(isinstance(identity, str) and identity and
+               identity not in case_by_id, "duplicate_case_identity")
+        _check(isinstance(scene, str) and scene, "case_missing_scene")
         kind = case.get("kind")
-        _require(kind in {"clean", "fault_injected"}, "invalid_case_kind:" + cid)
+        _check(kind in {"clean", "fault_injected"}, "case_kind:" + identity)
+        _check("split" not in case, "method_specific_split_in_base_case")
         if kind == "clean":
-            _require(cid == "clean:" + scene and scene not in clean_ids,
-                     "invalid_clean_case:" + cid)
-            clean_ids.add(scene)
+            _check(identity == "clean:" + scene and scene not in scenes,
+                   "clean_scene_identity")
+            scenes.add(scene)
         else:
+            if (case.get("recovery") or {}).get("globally_recovered") is True:
+                recovered.add(identity)
             atoms = (case.get("fault") or {}).get("atoms") or []
-            fault_cases[str(atoms[0].get("kind", "unknown"))
-                        if atoms and isinstance(atoms[0], dict)
-                        else "unknown"] += 1
-        case_index[cid] = case
-    _require(clean_ids == set(scene_to_split), "missing_clean_scene_case")
+            if atoms and isinstance(atoms[0], dict):
+                fault_by_kind[str(atoms[0].get("kind", "unknown"))] += 1
+            else:
+                fault_by_kind["unknown"] += 1
+        cases_by_kind[kind] += 1
+        case_by_id[identity] = case
+    _check(bool(scenes), "no_clean_scenes")
+    _check(all(c["scene_id"] in scenes for c in cases),
+           "fault_scene_missing_clean_pair")
 
-    seen_ids = set()
-    seen_rounds = set()
-    seen_prompts = defaultdict(lambda: {
-        "splits": set(), "labels": set(), "ids": [],
-    })
-    exact = Counter()
-    source_counts, action_counts, mode_counts = Counter(), Counter(), Counter()
-    source_split, split_counts = Counter(), Counter()
-    scene_counts, fault_decisions = Counter(), Counter()
-    for i, (decision, (adapter_split, adapter)) in enumerate(
-            zip(decisions, sft_rows)):
-        did = decision.get("decision_id")
-        scene = decision.get("scene_id")
-        cid = decision.get("case_id")
-        split = decision.get("split")
-        _require(isinstance(did, str) and did not in seen_ids,
-                 "duplicate_decision_id:" + str(did))
+    teacher_by_id = {}
+    for item in labels:
+        did = item.get("decision_id")
+        _check(isinstance(did, str) and did and
+               did not in teacher_by_id, "duplicate_private_teacher_id")
+        _check("split" not in item, "method_specific_split_in_teacher")
+        _check(isinstance(item.get("ground_truth"), str),
+               "missing_private_ground_truth")
+        teacher_by_id[did] = item
+
+    seen_ids, seen_rounds = set(), set()
+    prompts = defaultdict(lambda: {"actions": set(), "ids": []})
+    identical = Counter()
+    sources, source_mode, modes, actions = Counter(), Counter(), Counter(), Counter()
+    fault_decisions, scene_decisions = Counter(), Counter()
+    for row in decisions:
+        did, cid, scene = (
+            row.get("decision_id"), row.get("case_id"), row.get("scene_id")
+        )
+        _check(isinstance(did, str) and did and did not in seen_ids,
+               "duplicate_decision_id")
         seen_ids.add(did)
-        _require(scene in scene_to_split and
-                 split == scene_to_split[scene] == adapter_split,
-                 "decision_scene_split_mismatch:" + str(did))
-        case = case_index.get(cid)
-        _require(case is not None and case["scene_id"] == scene,
-                 "missing_or_wrong_case:" + did)
-        source = decision.get("source")
-        _require(source in {"clean", "untrusted"}, "invalid_source:" + did)
-        _require((source == "clean" and case["kind"] == "clean") or
-                 (source == "untrusted" and
-                  case["kind"] == "fault_injected" and
-                  (case.get("recovery") or {}).get("globally_recovered") is True),
-                 "unpublished_or_mismatched_case:" + did)
-        turn = decision.get("decision_round")
-        _require(type(turn) is int and turn >= 1,
-                 "invalid_decision_round:" + did)
-        rkey = (cid, turn)
-        _require(rkey not in seen_rounds, "duplicate_case_round:" + did)
-        seen_rounds.add(rkey)
-        prompt = decision.get("prompt")
-        _require(isinstance(prompt, list) and len(prompt) == 1 and
-                 isinstance(prompt[0], dict) and
-                 prompt[0].get("role") == "user" and
-                 isinstance(prompt[0].get("content"), str) and
-                 bool(prompt[0]["content"]), "invalid_o1_prompt:" + did)
-        ref = decision.get("reference_action")
-        _check_action(ref, did)
-        _require(isinstance(adapter, dict) and
-                 set(adapter) == {"prompt", "completion"} and
-                 adapter["prompt"] == prompt, "adapter_prompt_drift:" + did)
-        completion = adapter["completion"]
-        _require(isinstance(completion, list) and len(completion) == 1 and
-                 isinstance(completion[0], dict) and
-                 completion[0].get("role") == "assistant" and
-                 isinstance(completion[0].get("content"), str),
-                 "invalid_sft_completion:" + did)
-        try:
-            actual = json.loads(completion[0]["content"])
-        except (ValueError, TypeError) as exc:
-            raise ValueError("data_quality:invalid_sft_json:" + did) from exc
-        _require(actual == ref, "adapter_completion_drift:" + did)
-
-        ph = _digest(prompt[0]["content"])
-        ah = _action_key(ref)
-        group = seen_prompts[ph]
-        group["splits"].add(split)
-        group["labels"].add(ah)
-        group["ids"].append(did)
-        exact[(ph, ah)] += 1
-        source_counts[source] += 1
-        source_split[(split, source)] += 1
-        action_counts[ref["action"]] += 1
-        mode_counts[str(decision.get("generation_mode", "unknown"))] += 1
-        split_counts[split] += 1
-        scene_counts[scene] += 1
+        _check(cid in case_by_id and
+               case_by_id[cid]["scene_id"] == scene,
+               "decision_case_mismatch:" + did)
+        _check("split" not in row, "method_specific_split_in_decision")
+        kind = case_by_id[cid]["kind"]
+        source = row.get("source")
+        _check((source == "clean" and kind == "clean") or
+               (source == "untrusted" and kind == "fault_injected" and
+                cid in recovered),
+               "decision_is_not_published_positive:" + did)
+        number = row.get("decision_round")
+        _check(type(number) is int and number >= 1,
+               "invalid_decision_round:" + did)
+        _check((cid, number) not in seen_rounds,
+               "duplicate_case_round:" + did)
+        seen_rounds.add((cid, number))
+        prompt = row.get("prompt")
+        _check(isinstance(prompt, list) and len(prompt) == 1 and
+               isinstance(prompt[0], dict) and
+               prompt[0].get("role") == "user" and
+               isinstance(prompt[0].get("content"), str) and
+               bool(prompt[0]["content"]),
+               "invalid_o1_prompt:" + did)
+        state = row.get("visible_state")
+        _check(isinstance(state, dict) and
+               set(state) == {"subtask_history"} and
+               isinstance(state["subtask_history"], str),
+               "visible_history:" + did)
+        _check(isinstance(row.get("question"), str),
+               "missing_scene_question:" + did)
+        _validate_action(row.get("reference_action"), did)
+        teacher = teacher_by_id.get(did)
+        _check(teacher is not None and
+               teacher.get("case_id") == cid and
+               teacher.get("scene_id") == scene and
+               teacher.get("reference_action") == row["reference_action"],
+               "teacher_decision_alignment:" + did)
+        h = _hash(prompt[0]["content"])
+        ah = _action_hash(row["reference_action"])
+        prompts[h]["actions"].add(ah)
+        prompts[h]["ids"].append(did)
+        identical[(h, ah)] += 1
+        sources[source] += 1
+        mode = str(row.get("generation_mode", "unknown"))
+        modes[mode] += 1
+        source_mode[(source, mode)] += 1
+        actions[row["reference_action"]["action"]] += 1
+        scene_decisions[scene] += 1
         if source == "untrusted":
-            atoms = (case.get("fault") or {}).get("atoms") or []
-            fault_decisions[str(atoms[0].get("kind", "unknown"))
-                            if atoms and isinstance(atoms[0], dict)
-                            else "unknown"] += 1
-
-    cross_split = [h for h, row in seen_prompts.items()
-                   if len(row["splits"]) > 1]
-    _require(not cross_split, "cross_split_identical_prompts:" +
-             ",".join(sorted(cross_split)[:3]))
-    conflicts = [(h, row) for h, row in seen_prompts.items()
-                 if len(row["labels"]) > 1]
-    if strict_conflicts:
-        _require(not conflicts, "conflicting_labels_for_identical_prompt:" +
-                 ",".join(sorted(h for h, _ in conflicts)[:3]))
-    per_scene = sorted(scene_counts.values())
+            atoms = (case_by_id[cid].get("fault") or {}).get("atoms") or []
+            if atoms and isinstance(atoms[0], dict):
+                fault_decisions[str(atoms[0].get("kind", "unknown"))] += 1
+            else:
+                fault_decisions["unknown"] += 1
+    _check(seen_ids == set(teacher_by_id), "unmatched_private_teacher")
+    per_scene = sorted(scene_decisions.values())
+    conflicts = [(key, value) for key, value in prompts.items()
+                 if len(value["actions"]) > 1]
     warnings = []
-    exact_extras = sum(count - 1 for count in exact.values())
-    if exact_extras:
-        warnings.append("identical_prompt_and_completion_repeated")
+    extra = sum(n - 1 for n in identical.values())
+    if extra:
+        warnings.append("identical_prompt_and_reference_action_repeated")
     if conflicts:
-        warnings.append("identical_prompt_has_conflicting_completions")
-    if source_counts["untrusted"] > 9 * max(1, source_counts["clean"]):
+        warnings.append("identical_prompt_has_conflicting_references")
+    if sources["untrusted"] > 9 * max(1, sources["clean"]):
         warnings.append("untrusted_decisions_outnumber_clean_by_over_9_to_1")
     return {
         "schema": SCHEMA,
-        "scene_counts": dict(sorted(Counter(scene_to_split.values()).items())),
+        "scene_count": len(scenes),
         "case_count": len(cases),
+        "cases_by_kind": dict(sorted(cases_by_kind.items())),
         "decision_count": len(decisions),
-        "decision_split_counts": {s: split_counts[s] for s in SPLITS},
-        "source_counts": dict(sorted(source_counts.items())),
-        "source_by_split": {
-            s: {src: source_split[(s, src)]
-                for src in ("clean", "untrusted")} for s in SPLITS
+        "source_counts": dict(sorted(sources.items())),
+        "source_generation_modes": {
+            source: {mode: n for (s, mode), n in sorted(source_mode.items())
+                    if s == source}
+            for source in ("clean", "untrusted")
         },
-        "action_counts": dict(sorted(action_counts.items())),
-        "generation_modes": dict(sorted(mode_counts.items())),
-        "fault_cases_by_kind": dict(sorted(fault_cases.items())),
+        "generation_modes": dict(sorted(modes.items())),
+        "action_counts": dict(sorted(actions.items())),
+        "fault_cases_by_kind": dict(sorted(fault_by_kind.items())),
         "fault_decisions_by_kind": dict(sorted(fault_decisions.items())),
-        "unique_prompt_count": len(seen_prompts),
+        "unique_prompt_count": len(prompts),
         "repeated_prompt_groups": sum(
-            len(v["ids"]) > 1 for v in seen_prompts.values()
+            len(v["ids"]) > 1 for v in prompts.values()
         ),
-        "exact_duplicate_decision_rows": exact_extras,
+        "exact_duplicate_decision_rows": extra,
         "conflicting_prompt_groups": len(conflicts),
         "conflict_examples": [{
-            "prompt_sha256": h,
-            "decision_ids": row["ids"][:8],
-            "distinct_completion_count": len(row["labels"]),
-        } for h, row in sorted(conflicts)[:10]],
-        "cross_split_prompt_groups": len(cross_split),
+            "prompt_sha256": key,
+            "decision_ids": value["ids"][:8],
+            "distinct_completion_count": len(value["actions"]),
+        } for key, value in sorted(conflicts)[:10]],
         "per_scene_decisions": {
             "min": per_scene[0] if per_scene else 0,
             "median": median(per_scene) if per_scene else 0,
             "max": per_scene[-1] if per_scene else 0,
-            "top_scenes": [
-                {"scene_id": scene, "decisions": count}
-                for scene, count in sorted(
-                    scene_counts.items(), key=lambda pair: (-pair[1], pair[0])
-                )[:10]
-            ],
+            "top_scenes": [{
+                "scene_id": scene, "decisions": count
+            } for scene, count in sorted(
+                scene_decisions.items(), key=lambda item: (-item[1], item[0])
+            )[:10]],
         },
         "warnings": warnings,
     }
 
 
-def _read_jsonl(path: Path) -> list[dict]:
-    if not path.is_file():
-        raise FileNotFoundError("data_quality:missing_file:" + str(path))
-    rows = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if line.strip():
-            item = json.loads(line)
-            _require(isinstance(item, dict),
-                     "invalid_jsonl_row:" + str(path) + ":" + str(line_number))
-            rows.append(item)
-    return rows
-
-
-def audit_output(output_dir: Path, *, check_parquet: bool = False,
-                 strict_conflicts: bool = False) -> dict:
-    """Audit persisted JSONL and optionally verify Parquet adapter round trips."""
-    output_dir = Path(output_dir)
-    split_file = output_dir / "splits.json"
-    split_data = json.loads(split_file.read_text(encoding="utf-8"))
-    scene_to_split = split_data["scene_to_split"]
-    cases, decisions, sft_rows = [], [], []
-    for split in SPLITS:
-        cases.extend(_read_jsonl(output_dir / "cases" / (split + ".jsonl")))
-        split_decisions = _read_jsonl(output_dir / "decisions" / (split + ".jsonl"))
-        adapters = _read_jsonl(
-            output_dir / "adapters" / "da-sft" / (split + ".jsonl")
-        )
-        decisions.extend(split_decisions)
-        sft_rows.extend((split, row) for row in adapters)
-        _require(len(split_decisions) == len(adapters),
-                 "decision_adapter_split_length_mismatch:" + split)
-        if check_parquet:
-            parquet_name = "eval" if split == "val" else split
-            path = output_dir / "adapters" / "da-sft" / (parquet_name + ".parquet")
-            if adapters:
-                import pyarrow.parquet as pq
-                _require(path.is_file(), "missing_sft_parquet:" + str(path))
-                _require(pq.read_table(path).to_pylist() == adapters,
-                         "sft_parquet_round_trip_mismatch:" + split)
-            else:
-                _require(not path.exists(),
-                         "unexpected_sft_parquet_for_empty_split:" + split)
+def audit_output(output_dir: Path, *, verify_manifest: bool = False) -> dict:
+    root = Path(output_dir)
+    files = {
+        "cases.jsonl": root / "cases.jsonl",
+        "decisions.jsonl": root / "decisions.jsonl",
+        "private/decision_labels.jsonl": root / "private/decision_labels.jsonl",
+    }
+    if verify_manifest:
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        for name, path in files.items():
+            _check(digest(path) == manifest["base_file_sha256"].get(name),
+                   "base_source_checksum_changed:" + name)
     return audit_dataset(
-        cases, decisions, sft_rows, scene_to_split,
-        strict_conflicts=strict_conflicts,
+        read_jsonl(files["cases.jsonl"]),
+        read_jsonl(files["decisions.jsonl"]),
+        read_jsonl(files["private/decision_labels.jsonl"]),
     )
 
 
 def main(argv=None):
+    import argparse
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--check-parquet", action="store_true")
-    parser.add_argument("--strict-conflicts", action="store_true")
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--verify-manifest", action="store_true")
     args = parser.parse_args(argv)
-    result = audit_output(
-        args.output_dir, check_parquet=args.check_parquet,
-        strict_conflicts=args.strict_conflicts,
-    )
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    print(json.dumps(audit_output(
+        args.output_dir, verify_manifest=args.verify_manifest,
+    ), ensure_ascii=False, indent=2))
     return 0
 
 
