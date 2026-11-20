@@ -18,6 +18,7 @@ from dataset.prepare_da_grpo import (
     digest, make_examples, read_jsonl, settings_for,
 )
 from .splits import load_splits, make_splits, verify_splits
+from .audit import audit_dataset, audit_output
 
 CASE_SCHEMA = "maestro.paired_case.v1"
 DECISION_SCHEMA = "maestro.main_decision.v1"
@@ -244,7 +245,7 @@ def _build_decisions(
             # The original Stage4 display sample_id is NOT unique across
             # multiple one-fault variants of the same fork/decision round.
             # round_sample_id is the explicit and immutable candidate key.
-            from train_maestro_8b.data.export_da_grpo import convert
+            from train_maestro_8b.data.export_da_grpo import convert, REVIEWED_MODES
             index = {}
             for turn in turns:
                 key = (turn.get("round_sample_id"), turn.get("round"))
@@ -252,12 +253,18 @@ def _build_decisions(
                         or key in index):
                     raise ValueError("duplicate_or_missing_stage4_decision_key")
                 index[key] = turn
-            if turns:
+            eligible = [
+                turn for turn in turns
+                if not require_llm or turn.get("generation_mode") in REVIEWED_MODES
+            ]
+            if eligible:
                 examples, _, _ = convert(
-                    list(scenes.values()), turns, settings,
-                    reviewed_only=require_llm,
+                    list(scenes.values()), eligible, settings,
+                    reviewed_only=False,
                 )
             else:
+                # Stage 4 can be present but contain no positive reviewed
+                # labels; keep the valid Stage-3 rows rather than failing.
                 examples = []
             prepared = []
             for example in examples:
@@ -330,7 +337,7 @@ def export_dataset(
     seed: int = 17, ratios=(0.8, 0.1, 0.1),
     split_map_path: Path | None = None,
     require_llm: bool = True, parquet: bool = False,
-    overwrite: bool = False,
+    overwrite: bool = False, strict_conflicts: bool = False,
 ) -> dict:
     paths = [Path(p) for p in (
         scenes_path, clean_episodes_path, clean_turns_path,
@@ -393,6 +400,14 @@ def export_dataset(
     )
     if not decisions:
         raise ValueError("no_valid_main_training_decisions")
+    quality = audit_dataset(
+        cases, decisions, sft, splits, strict_conflicts=strict_conflicts,
+    )
+    if parquet and any(quality["decision_split_counts"][s] == 0 for s in SPLITS):
+        raise ValueError(
+            "empty_da_sft_split_after_review_filter:" +
+            json.dumps(quality["decision_split_counts"], sort_keys=True)
+        )
     if output_dir.exists() and any(output_dir.iterdir()):
         if not overwrite:
             raise FileExistsError(
@@ -401,6 +416,7 @@ def export_dataset(
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_json(output_dir / "splits.json", split_data)
+    _write_json(output_dir / "quality_report.json", quality)
     for name in SPLITS:
         _write_jsonl(
             output_dir / "cases" / (name + ".jsonl"),
@@ -438,6 +454,12 @@ def export_dataset(
                             (("eval" if name == "val" and adapter == "da-sft"
                               else name) + ".parquet"))
                     pq.write_table(pa.Table.from_pylist(selected), path)
+    # Read back the persisted adapter, not only the in-memory representation.
+    # Parquet round-trip is verified whenever --parquet is requested.
+    audit_output(
+        output_dir, check_parquet=parquet,
+        strict_conflicts=strict_conflicts,
+    )
     distribution = Counter(row["split"] for row in decisions)
     case_distribution = Counter(row["split"] for row in cases)
     source_distribution = Counter(row["source"] for row in decisions)
@@ -482,6 +504,10 @@ def export_dataset(
         "clean_cases": sum(case["kind"] == "clean" for case in cases),
         "require_llm": require_llm,
         "parquet": parquet,
+        "quality_report": "quality_report.json",
+        "quality_warnings": quality["warnings"],
+        "quality_conflicting_prompt_groups": quality["conflicting_prompt_groups"],
+        "quality_exact_duplicate_rows": quality["exact_duplicate_decision_rows"],
         "label_policy": (
             "Private fault and recovery state only in paired Cases and "
             "private/decision_labels; O1 prompts rebuilt exactly from "
@@ -503,6 +529,8 @@ def main(argv=None):
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--allow-template", action="store_true")
     parser.add_argument("--parquet", action="store_true")
+    parser.add_argument("--strict-conflicts", action="store_true",
+                        help="Reject identical prompts with different expert actions")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args(argv)
     ratio = (args.train_ratio, args.val_ratio,
@@ -516,6 +544,7 @@ def main(argv=None):
         split_map_path=args.split_map,
         seed=args.seed, require_llm=not args.allow_template,
         parquet=args.parquet, overwrite=args.overwrite,
+        strict_conflicts=args.strict_conflicts,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

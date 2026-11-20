@@ -66,3 +66,10 @@ The exporter deliberately does **not** add an assistant expert reply to
 single-decision observation used in Orchestra-o1's offline GRPO.
 
 Train with [../baseline/da-grpo/README.md](../baseline/da-grpo/README.md).
+
+## Current DA-SFT entrypoint
+
+DA-SFT now consumes the canonical `environment.data_export` adapter directly.
+Use `environment/data/unified/adapters/da-sft/{train,eval,test}.parquet` with
+the frozen `splits.json`; no DA-GRPO-to-SFT join is needed. See
+[`baseline/da-sft/README.md`](../baseline/da-sft/README.md).

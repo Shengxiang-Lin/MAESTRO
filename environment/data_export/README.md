@@ -38,6 +38,7 @@ stored under `private/decision_labels/<split>.jsonl`.
 ```text
 output/
   manifest.json                 # source SHA-256 / counts / policies
+  quality_report.json           # Scene coverage, label conflicts, distribution audit
   splits.json                   # frozen Scene -> train/val/test assignment
   cases/{train,val,test}.jsonl  # clean+fault paired private cases
   decisions/{train,val,test}.jsonl
@@ -71,6 +72,26 @@ python -m environment.data_export \\
   --output-dir environment/data/unified_llm_pilot_10_1000 \\
   --seed 17 --parquet
 ```
+
+The exporter automatically audits Scene isolation, Case identity and
+publication status, exact SFT prompt/completion parity, source/action/mode
+counts, per-Scene imbalance, identical prompts, contradictory completions,
+and Stage-4 fault distribution. It writes `quality_report.json`, and
+verifies any `--parquet` SFT adapter against the canonical JSONL output.
+Cross-split identical prompts fail; within-split repeated examples and
+conflicting completions are counted (not silently removed). To reject the
+latter as well, add `--strict-conflicts`.
+
+To re-audit existing artifacts without rebuilding:
+
+```bash
+python -m environment.data_export.audit   --output-dir environment/data/unified --check-parquet --strict-conflicts
+```
+
+Parquet mode requires nonempty train/val/test decision splits after
+positive-label filtering. If a pilot has too few reviewed decisions to cover
+all three partitions, use a larger dataset rather than introducing template
+fallback labels or silently reassigning held-out Scenes.
 
 The default is **LLM-reviewed decisions only**. `--allow-template`
 exists for explicit debugging, not production-quality training.

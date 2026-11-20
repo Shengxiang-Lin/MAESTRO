@@ -141,6 +141,14 @@ class PairedDatasetEndToEndTests(unittest.TestCase):
                 require_llm=False,
             )
             self.assertEqual(manifest["accepted_fault_cases"], 2)
+            quality = json.loads(
+                (out / "quality_report.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(quality["decision_count"],
+                             sum(manifest["decision_counts"].values()))
+            self.assertEqual(quality["cross_split_prompt_groups"], 0)
+            self.assertEqual(quality["source_counts"]["untrusted"],
+                             manifest["decision_sources"]["untrusted"])
             splits = json.loads(
                 (out / "splits.json").read_text(encoding="utf-8")
             )["scene_to_split"]

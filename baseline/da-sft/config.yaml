@@ -4,8 +4,8 @@ version: 1
 
 paths:
   model: base_models/Qwen3-8B
-  train_parquet: dataset/data/da-sft/train.parquet
-  eval_parquet: dataset/data/da-sft/eval.parquet
+  train_parquet: environment/data/unified/adapters/da-sft/train.parquet
+  eval_parquet: environment/data/unified/adapters/da-sft/eval.parquet
   output_dir: baseline/da-sft/output
 
 model:
