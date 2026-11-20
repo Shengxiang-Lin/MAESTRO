@@ -1,0 +1,63 @@
+# MAESTRO standalone Stage2 GRPO: Unsloth + TRL + colocated vLLM
+# Single RTX 6000D (83 GiB). Separate Python env recommended.
+version: 2
+
+paths:
+  model: base_models/Qwen3-8B
+  train_parquet: workspace/maestro_8b/stage2_da/train.parquet
+  output_dir: workspace/maestro_8b/checkpoints/stage2-global-grpo
+
+judge:
+  registry: config/model_config.yaml
+  model: qwen3.7-flash
+  api_key_env: DASHSCOPE_API_KEY
+  enable_thinking: false
+  workers: 4
+
+model:
+  dtype: bfloat16
+  max_seq_length: 16384
+  load_in_4bit: false
+  lora_rank: 32
+  lora_alpha: 64
+  lora_dropout: 0.0
+  lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+rollout:
+  prompts_per_step: 1
+  num_generations: 8
+  # Total context = 12,288 prompt + 4,096 generated = 16,384 tokens.
+  max_prompt_tokens: 12288
+  max_completion_tokens: 4096
+  temperature: 1.0
+  top_p: 1.0
+  # Standby otherwise overrides 0.35 -> ~0.879 and gives vLLM an oversized
+  # KV reservation. Leave headroom for long-context BF16 LoRA backward.
+  gpu_memory_utilization: 0.70
+  standby_util_override: true
+  # One prompt x eight candidates; cap concurrent vLLM requests at eight.
+  max_num_seqs: 8
+  # FLASH_ATTN on RTX 6000D SM120 rejects FP8 KV Cache (requires other
+  # FA3/FA4 and device/head-size combinations). With BF16 model, auto = BF16 KV.
+  kv_cache_dtype: auto
+  # Unsloth's native fallback on NVIDIA SM120 selects FLASH_ATTN when
+  # FlashInfer is excluded. vLLM 0.32 does not honor VLLM_ATTENTION_BACKEND.
+  disable_flashinfer: true
+  # Safe SM120 default; opt-in CUDA Graph tuning only after an end-to-end smoke test.
+  enforce_eager: true
+  standby: true
+
+training:
+  epochs: 3
+  max_steps: -1
+  learning_rate: 0.00005
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  clip_range: 0.2
+  kl_coef: 0.01
+  loss_type: dapo
+  optim: adamw_8bit
+  max_grad_norm: 1.0
+  save_steps: 50
+  logging_steps: 1
+  seed: 42

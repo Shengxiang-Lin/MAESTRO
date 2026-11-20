@@ -9,7 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from train_maestro_8b.data.export_da_grpo import convert, export
-from train_maestro_8b.policy.da_backend import build_stage2_config, get_da_baseline
+from train_maestro_8b.policy.da_backend import build_stage2_config
+from train_maestro_8b.policy import grpo_runtime as runtime
 
 
 def scene():
@@ -93,7 +94,7 @@ class Stage2DAExport(unittest.TestCase):
 class Stage2DABackend(unittest.TestCase):
     def args(self):
         return argparse.Namespace(
-            config=str(Path("baseline/da-grpo/config.yaml").resolve()),
+            config=str(runtime.DEFAULT_CONFIG),
             model="base_models/Qwen3-8B",
             train_file="workspace/maestro_8b/stage2_da/train.parquet",
             output_dir="workspace/maestro_8b/checkpoints/stage2-da",
@@ -110,10 +111,9 @@ class Stage2DABackend(unittest.TestCase):
             judge_registry="config/model_config.yaml",
         )
 
-    def test_exact_reference_trainer_contract(self):
-        baseline = get_da_baseline()
-        cfg = build_stage2_config(self.args(), baseline)
-        kwargs = baseline.build_grpo_kwargs(cfg)
+    def test_independent_grpo_trainer_contract(self):
+        cfg = build_stage2_config(self.args())
+        kwargs = runtime.build_grpo_kwargs(cfg)
         self.assertEqual(kwargs["loss_type"], "dapo")
         self.assertEqual(kwargs["beta"], 0.01)
         self.assertEqual(kwargs["num_generations"], 8)
@@ -128,12 +128,11 @@ class Stage2DABackend(unittest.TestCase):
         self.assertFalse(cfg["model"]["load_in_4bit"])
 
     def test_reject_context_overflow(self):
-        baseline = get_da_baseline()
         args = self.args()
         args.max_new_tokens = 4096
         args.max_length = 13000
         with self.assertRaisesRegex(ValueError, "exceeds"):
-            build_stage2_config(args, baseline)
+            build_stage2_config(args)
 
     @patch("train_maestro_8b.policy.da_backend.main")
     def test_main_trainer_dispatch(self, fake):

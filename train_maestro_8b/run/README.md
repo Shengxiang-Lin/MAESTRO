@@ -123,11 +123,14 @@ GRPO_MAX_STEPS=100 STAGE2_TRAINER=da bash train_maestro_8b/run/pipeline.sh grpo
 The default already is `STAGE2_TRAINER=da`. Data conversion, trainer
 selection and run outputs are all owned by `train_maestro_8b/`.
 The Stage2 backend constructs its own Unsloth + TRL GRPOTrainer, while
-reusing the **unmodified** DA baseline's helper/reward modules as a
-reference. No edited-KV RiskKV prefill and no Risk Head are loaded.
+using only MAESTRO-owned GRPO runtime helpers and four-dimension DA
+ablation reward modules. No code or configuration from
+`baseline/da-grpo/` is imported or read. No edited-KV RiskKV prefill
+and no Risk Head are loaded.
 Training uses native Qwen3 chat template, Unsloth+TRL GRPOTrainer,
-colocated vLLM, DAPO+KL and exact baseline four-dimension LLM Judge
-(including the expert and ground truth in **reward-only** data).
+colocated vLLM, DAPO+KL, and the Global Evidence/Recovery Judge by
+default. The optional `DA_REWARD_MODE=da` ablation uses the legacy
+four-dimension O1 Judge (expert/gold stay **reward-only**).
 
 To compare RiskKV, set `STAGE2_TRAINER=riskkv` explicitly. The older
 instructions below concern that **experimental** mode.
@@ -191,8 +194,8 @@ vLLM server:
 
 ## DA-GRPO-aligned 83 GiB training profile (default)
 
-The original baseline is `baseline/da-grpo/config.yaml`.
-Current MAESTRO Stage2 defaults match its training and generation
+The standalone default config is `train_maestro_8b/policy/grpo_config.yaml`.
+Current MAESTRO Stage2 defaults match DA's training and generation
 hyperparameters where the existing NF4 RiskKV training architecture allows.
 
 | Setting | DA-GRPO | MAESTRO RiskKV |
