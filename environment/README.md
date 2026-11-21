@@ -19,7 +19,7 @@ python -m environment naturalize-subtasks \
 python -m environment generate-main-turns \
   --config environment/configs/main_orchestration.yaml
 
-# Stage 4: single-fault evidence recovery, reviewed Main decisions
+# Stage 4: Main-observable one-fault, single-turn next-decision supervision
 python -m environment generate-untrusted-turns \
   --config environment/configs/untrusted_orchestration.yaml
 ```
@@ -39,10 +39,10 @@ Stage 4 validates and reuses the Stage 3 Clean Reference when
 
 ## Stage 4 supervision
 
-- `untrusted_orchestration/visible_claim_extraction.py`: parses explicit
+- `untrusted_orchestration/inspection/visible_claim_extraction.py`: parses explicit
   typed assertions only from the actually returned Sub-Agent
   `finish_result.result` and `summary`. Unparseable text remains unknown.
-- `untrusted_orchestration/visible_claim_state.py`: constructs the
+- `untrusted_orchestration/inspection/visible_claim_state.py`: constructs the
   per-round Claim–Source–Dependency state and relational evidence graph,
   including source lineage, ambiguous provenance, observed contradictions,
   partial deliveries and retry replacement.
@@ -61,13 +61,15 @@ dependencies are teacher-side structural annotations, never invented
 visible evidence. Oracle/Gold is used only to validate the execution
 outcome and remains private.
 
-Stage 4 uses synchronous completed Sub-Agent batches and **one atomic
-fault per branch**. The pilot samples early/middle/late feedback forks,
-performs paired no-repair/recovery replays, and language-reviews a bounded
-number of genuine failure branches for observable state supervision.
-Only globally recovered branches can become positive Main SFT labels. No asynchronous messages or multi-fault combination
-are generated. Successful recovery is selected by executable replay,
-not by a model asserting that it recovered.
+Stage 4 preserves the exact Stage-3 history preceding the latest
+completed Sub-Agent batch and applies **one atomic fault per candidate**.
+It first targets Main-observable A (evidence insufficiency) or B1/B2/B3
+(evidence inconsistency), then validates the realized public witness before
+selecting one legal next Main `delegate_task` decision. The future batch is
+not executed: `single_turn_accepted` means a reviewed next-step label, **not**
+globally recovered execution. Failed, unobservable, duplicate and budget-reserve
+candidates remain private. The maintained YAML/CLI does not accept the retired
+multi-round recovery mode.
 
 ## Functional packages
 

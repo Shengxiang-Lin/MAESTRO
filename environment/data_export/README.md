@@ -148,3 +148,15 @@ and ETA; completed Case/decision conversion stages also show useful
 acceptance or action statistics. Use `--no-progress` on the `python -m environment.data_export`
 command to suppress progress bars when running CI or redirecting logs.
 This changes only the display, not the generated records or split policy.
+
+
+## Single-turn publication semantics
+
+Current Stage 4 writes one reviewed Main next-decision per selected candidate,
+using journal status `single_turn_accepted`. This is **not** a completed
+recovery episode. The exporter accepts both old `recovered` records and the
+current single-turn status, setting `recovery.decision_accepted=true` for
+published Stage-4 cases. `recovery.globally_recovered` is `null` for
+single-turn cases: there is no future Sub-Agent execution to evaluate.
+Dataset preparation should use `decision_accepted` when testing publication
+eligibility rather than treating null global recovery as failure.
