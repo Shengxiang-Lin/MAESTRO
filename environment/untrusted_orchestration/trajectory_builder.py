@@ -83,17 +83,6 @@ Return JSON containing only:
 """
 
 
-_MAIN_CRITIC_SYSTEM = _CRITIC_SYSTEM + """
-UNTRUSTED RECOVERY REVIEW:
-Judge whether the produced prose faithfully conveys the planner's
-fixed targeted repair, still-usable prior results, and independent
-parallel tasks. The planner has ALREADY proved dependency legality.
-A Sub-Agent done flag is execution termination, not proof of factual
-correctness. Rejected text must be repaired as prose ONLY; do not
-invent a new task, future evidence, attack origin, or hidden Gold.
-"""
-
-
 _MAIN_REASONING_CRITIC_SYSTEM = """Review ONLY the Main-Agent's reasoning for
 the current delegated evidence requests. The assignment contract was
 deterministically validated in the evidence simulator and is IMMUTABLE.
@@ -336,6 +325,7 @@ def build_branch(
         report_revisions=report_max_revisions,
         on_report_review=on_report_review,
     )
+    state.cross_source_checks_enabled = True
     scheduler = EventScheduler([], state=state, fork_round=branch_round)
     catalog = source_catalog(scene)
     graph = scene["macro_graph"]
