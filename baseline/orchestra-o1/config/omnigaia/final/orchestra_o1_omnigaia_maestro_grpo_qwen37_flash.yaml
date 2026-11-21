@@ -19,13 +19,13 @@ models:
   qwen3-8b-maestro-grpo-lora:
     backend: vllm
     model_path: "base_models/Qwen3-8B"
-    lora_adapter_path: "workspace/maestro_8b/checkpoints/stage2-global-grpo/final_adapter"
+    lora_adapter_path: "workspace/maestro_8b/checkpoints/stage2-global-grpo/checkpoint-200"
     served_model_name: "qwen3-8b-maestro-grpo-lora"
     lora_base_served_name: "qwen3-8b-maestro-grpo-base"
     max_lora_rank: 32
     host: "127.0.0.1"
     port: 8812
-    gpus: [1]
+    gpus: [2]
     tensor_parallel_size: 1
     dtype: "bfloat16"
     gpu_memory_utilization: 0.70
