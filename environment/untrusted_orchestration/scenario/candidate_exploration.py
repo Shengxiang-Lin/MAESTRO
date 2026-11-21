@@ -7,8 +7,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from copy import deepcopy
-from hashlib import sha256
-import json
 import random
 
 from environment.generate_question.execution.program_ir import ProgramError
@@ -173,10 +171,7 @@ def _enumerate_scenario_first(
             "candidate_count_total": 0, "candidate_count_pruned": 0,
             "candidate_variant_index": None, "target_scenario": None,
         })
-        skipped["scenario_plan"] = make_scenario(
-            scene, skipped, mode="event_driven", max_fault_atoms=1,
-            delayed_evidence_probability=0.0,
-        )
+        skipped["scenario_plan"] = make_scenario(scene, skipped)
         return [skipped]
     sampled = ordered if max_candidates is None else ordered[:max_candidates]
     trials = []
@@ -194,10 +189,7 @@ def _enumerate_scenario_first(
                 seed=seed_local + slot, variant_index=variant,
             ).as_legacy_fault()],
         })
-        item["scenario_plan"] = make_scenario(
-            scene, item, mode="event_driven", max_fault_atoms=1,
-            delayed_evidence_probability=0.0,
-        )
+        item["scenario_plan"] = make_scenario(scene, item)
         item["scenario_plan"]["target_scenario"] = target
         trials.append(item)
     return trials
