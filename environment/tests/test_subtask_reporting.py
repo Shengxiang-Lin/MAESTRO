@@ -466,6 +466,51 @@ class ReportingUnitTests(unittest.TestCase):
             "trace_summary", critic.calls[0]["candidate_finish"]
         )
 
+    def test_reviewed_sibling_route_reports_keep_public_citations(self):
+        """Real Stage-2 Author/Critic reports must remain B3-comparable."""
+        from environment.untrusted_orchestration.inspection.visible_claim_extraction import (
+            extract_visible_claims,
+        )
+        selected = scene(0, "hard")
+        teacher = realize_scene(selected)["macro_tasks"]
+        for sid in ("link_a", "link_b"):
+            with self.subTest(source=sid):
+                record = next(
+                    row for row in teacher
+                    if row["authorized_source_ids"] == [sid]
+                    and set(row["output_schema"]) == {"route_key", "entity_0"}
+                )
+                reviewed, info = author_critic_report(
+                    record, question=None, author=ReportAuthor(),
+                    critic=ReportCritic(), max_revisions=0,
+                )
+                self.assertEqual(info["status"], "accepted", info)
+                self.assertEqual(
+                    info["public_result_format"], "typed_cited_result",
+                )
+                self.assertEqual(
+                    reviewed["finish_result"]["result"],
+                    code_owned_result(record),
+                )
+                claims, meta = extract_visible_claims(
+                    {"finish_result": reviewed["finish_result"]},
+                    output_fields=record["output_schema"],
+                    source_id=sid,
+                )
+                matched = [
+                    claim for claim in claims
+                    if claim["surface"] == "result"
+                    and claim["attribute"] == "entity_0"
+                    and claim["subject"].startswith("route:")
+                    and any(ref.startswith(sid + ":")
+                            for ref in claim["fact_refs"])
+                ]
+                self.assertTrue(matched, meta)
+                self.assertIn(
+                    "Later qualification remains unchecked.",
+                    reviewed["finish_result"]["summary"],
+                )
+
     def test_code_owned_finish_summary_is_authored_and_retained_for_main(self):
         """O1 finish.summary is not the first trace bullet."""
         from environment.base_orchestration.trajectory_builder import _main_report
