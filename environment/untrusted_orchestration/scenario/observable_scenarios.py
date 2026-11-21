@@ -120,6 +120,7 @@ def _public_claims(task: dict, report: dict) -> set[tuple]:
         # Different clue queries may return overlapping candidate lists.
         # Their membership is not a rival assertion about a fixed fact.
         and claim.get("attribute") != "identifier_present"
+        and claim.get("attribute") not in _UNSCOPED_IDENTIFIERS
     }
 
 
