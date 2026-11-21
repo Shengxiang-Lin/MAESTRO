@@ -23,7 +23,8 @@ _SCALAR = (str, int, float, bool)
 _SUMMARY_PAIR = re.compile(
     r"\b(?P<subject>(?:(?:Case|Entry)-\d{2,5}|Dossier-[A-Za-z0-9]+))\s*"
     r"(?::|,)\s*(?P<field>[A-Za-z][A-Za-z0-9_]*)\s*"
-    r"=\s*(?P<value>-?\d+(?:\.\d+)?|true|false)\b", re.I,
+    r"=\s*(?P<value>-?\d+(?:\.\d+)?|true|false)\b"
+    r"(?=$|[\s,.;!?])", re.I,
 )
 _CASE_LIST = re.compile(
     r"^The current task returned (?P<count>\d+) case identifiers?:\s*"
