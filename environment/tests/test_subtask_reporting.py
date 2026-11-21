@@ -471,7 +471,7 @@ class ReportingUnitTests(unittest.TestCase):
         from environment.untrusted_orchestration.inspection.visible_claim_extraction import (
             extract_visible_claims,
         )
-        selected = scene(0, "hard")
+        selected = scene(1, "hard")
         teacher = realize_scene(selected)["macro_tasks"]
         for sid in ("link_a", "link_b"):
             with self.subTest(source=sid):
