@@ -1315,9 +1315,15 @@ def generate_turns(
                     "selected" if row["selected_for_language_review"]
                     else "no_public_witness"
                     if row["realized_scenario"] is None
+                    else "target_mismatch"
+                    if row["selection_reason"] == "target_scenario_not_publicly_realized"
+                    else "no_legal_action"
+                    if row["selection_reason"] == "no_legal_current_decision_or_no_visible_issue"
                     else "duplicate"
-                    if row["recovery_rank"] is None
+                    if row["selection_reason"] == "duplicate_public_issue_and_action"
                     else "budget_reserve"
+                    if row["recovery_rank"] is not None
+                    else "other_unselected"
                     for row in selection_rows
                 ).items()
             ))
