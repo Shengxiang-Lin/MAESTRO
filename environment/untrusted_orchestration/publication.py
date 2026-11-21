@@ -141,7 +141,6 @@ def _publish(output: Path, planned: list[dict],
                 "rejected_turns": leaks,
             })
         audit_pair = data.get("private_audit") or {}
-        before_pair = audit_pair.get("counterfactual_unrepaired") or {}
         reference = base.get(plan["task_id"], {}).get("clean_reference_id")
         recorded = (audit_pair.get("clean_reference_identity") or {}).get(
             "clean_reference_id"
@@ -156,8 +155,6 @@ def _publish(output: Path, planned: list[dict],
             "fault_kinds_private": [
                 atom["kind"] for atom in plan["scenario_plan"]["fault_atoms"]
             ],
-            "naive_execution_status": before_pair.get("status"),
-            "naive_answer_correct": before_pair.get("correct"),
             "robust_publication_status": status,
             "private_only": True,
         })
@@ -221,7 +218,6 @@ def _publish(output: Path, planned: list[dict],
             public_episode = deepcopy(data["episode"])
             # Truth labels belong in private audit, never public reviewed-turn.
             public_episode.pop("outcome", None)
-            public_episode.pop("recovered", None)
             # Stable *candidate identity*, not a fault label. Stage 4 may
             # publish multiple distinct fault candidates for one fork round.
             # It is dataset metadata only, never included in the Main prompt.
@@ -330,7 +326,6 @@ def _publish(output: Path, planned: list[dict],
                 "fault_events_applied": audit.get(
                     "fault_events_applied", []
                 ),
-                "evidence_events": audit.get("event_timeline", []),
                 "observable_late_conflicts": conflicts,
                 "invalidations": invalidations,
                 "revalidations": runtime.get("revalidations", []),

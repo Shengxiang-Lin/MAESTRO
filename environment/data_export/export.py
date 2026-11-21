@@ -157,9 +157,6 @@ def _case_for_branch(
             # never executes the pending Sub-Agent batch or proves recovery.
             "globally_recovered": (published if journal.get("status") == "recovered"
                                    else None),
-            "counterfactual_unrepaired": deepcopy(
-                audit.get("counterfactual_unrepaired")
-            ),
             "observable_issues": deepcopy(
                 audit.get("observable_issue_snapshots") or []
             ),
@@ -172,9 +169,6 @@ def _case_for_branch(
             "invalidations": deepcopy(invalidations),
             "revalidations": deepcopy(
                 (audit.get("runtime") or {}).get("revalidations") or []
-            ),
-            "delayed_causal_audit": deepcopy(
-                audit.get("delayed_causal_audit")
             ),
         },
     }

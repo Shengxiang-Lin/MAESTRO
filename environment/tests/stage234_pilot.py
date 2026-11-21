@@ -8,7 +8,6 @@ This is NOT an LLM Author/Critic acceptance experiment.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -201,10 +200,6 @@ def run_pilot(output_dir: Path, *, count: int = 4,
         "visible_claim_state_labels": stage4.get(
             "claim_state_status_distribution", {}
         ),
-        "naive_outcomes": dict(Counter(
-            pair.get("naive_execution_status") or "not_recorded"
-            for pair in pairs
-        )),
         "workload": workload,
     }
     with (output_dir / "stage234_pilot_summary.json").open(

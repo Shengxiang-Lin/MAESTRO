@@ -43,7 +43,7 @@ class SingleTurnBranchTests(unittest.TestCase):
         self.assertEqual(current["action"], "delegate_task")
         self.assertTrue(current["result"]["pending"])
         self.assertEqual(current["result"]["subtask_results"], [])
-        self.assertFalse(episode["recovered"])
+        self.assertNotIn("recovered", episode)
 
     def test_original_prior_clean_dispatches_and_reports_are_unchanged(self):
         target = self.scene["macro_graph"]["reference_waves"][1][0]

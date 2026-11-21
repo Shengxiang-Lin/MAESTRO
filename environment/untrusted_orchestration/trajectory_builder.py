@@ -480,7 +480,6 @@ def build_branch(
         "branch_round": branch_round,
         "trajectory": trajectory,
         "outcome": stopped,
-        "recovered": False,
         "main_decision_rounds": len(trajectory),
     }
     audit = {
@@ -488,19 +487,16 @@ def build_branch(
         "branch_round": branch_round,
         "clean_reference_identity": clean_identity,
         "faults": injected,
-        "counterfactual_unrepaired": {"status": "not_evaluated_single_turn"},
         "runtime": state.audit(),
         "visible_claim_state": visible_claim_state,
         "observable_issue_snapshots": observable_issue_snapshots,
         "event_scenario": scenario_plan,
-        "event_timeline": [],
         "fault_events_applied": [{
             "task_id": faults[0].task_id,
             "kind": faults[0].atom_kind or faults[0].mode,
             "actual_execution_round": branch_round - 1,
             "where": "incoming_feedback",
         }],
-        "unrealized_future_fault_tasks": [],
         "decision_audit": decisions,
         "decision_reward_settings": {
             "max_parallel_tasks": max_parallel_tasks,
@@ -518,7 +514,6 @@ def build_branch(
         "main_action_reviews": main_reviews,
         "completion_generation_mode": None,
         "execution_outcome": stopped,
-        "execution_recovered": False,
         "language_review_accepted": accepted,
         "parallel_batches_verified": all(
             batch_has_independent_dependencies(

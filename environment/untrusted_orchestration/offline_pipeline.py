@@ -742,6 +742,5 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
         len(turns) if outcome == "single_turn_accepted" else 0
     )
     episode["outcome"] = outcome
-    episode["recovered"] = outcome == "recovered"
     return episode, (turns if outcome in {
         "single_turn_accepted"} else []), audit
