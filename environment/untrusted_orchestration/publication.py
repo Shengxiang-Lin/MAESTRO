@@ -11,6 +11,9 @@ from pathlib import Path
 import json
 
 from .inspection.publication_guard import review_turn_surface
+from .scenario.single_turn_selection import (
+    coordination_pattern, current_public_witness, evidence_relation,
+)
 from .storage import _atomic_jsonl
 
 def _published_result_formats(episodes: list[dict]) -> dict:
@@ -83,6 +86,11 @@ def _publish(output: Path, planned: list[dict],
     main_decision_contract_accepted = 0
     main_confirmed_visible_conflicts = 0
     main_conflict_critic_rereviews = 0
+    published_single_turn_relations = Counter()
+    published_single_turn_patterns = Counter()
+    published_single_turn_parallel = Counter()
+    published_single_turn_conflict_kinds = Counter()
+    published_single_turn_prefix_preserved = Counter()
     witnessed_report_fallbacks = 0
     witness_critic_rereviews = 0
     retained_language_exceptions = 0
@@ -172,6 +180,32 @@ def _publish(output: Path, planned: list[dict],
         # positive training data. Apply the SAME acceptance predicate to
         # public episodes and public Main turns.
         if status in {"recovered", "single_turn_accepted"}:
+            if status == "single_turn_accepted":
+                private = data["private_audit"]
+                issues, conflicts = current_public_witness(
+                    private, plan["branch_round"]
+                )
+                if not issues and not conflicts:
+                    raise RuntimeError(
+                        "single_turn_accepted_without_current_public_witness"
+                    )
+                relation = evidence_relation(issues, conflicts)
+                pattern, operations, parallel_tasks = coordination_pattern(
+                    private.get("evidence_plan") or []
+                )
+                published_single_turn_relations[relation] += 1
+                published_single_turn_patterns[pattern] += 1
+                published_single_turn_parallel[
+                    "parallel" if parallel_tasks > 1 else "single"
+                ] += 1
+                published_single_turn_prefix_preserved[
+                    "preserved" if private.get(
+                        "stage3_prior_history_preserved") is True else
+                    "unverified_legacy"
+                ] += 1
+                published_single_turn_conflict_kinds.update(
+                    event.get("kind", "unknown") for event in conflicts
+                )
             if not isinstance(data.get("episode"), dict):
                 raise RuntimeError(
                     "untrusted_recovered_branch_missing_public_episode"
@@ -550,6 +584,21 @@ def _publish(output: Path, planned: list[dict],
             counters["rejected_validation"]
         ),
         "published_episodes": len(episodes),
+        "published_single_turn_evidence_relations_4a": dict(
+            published_single_turn_relations
+        ),
+        "published_single_turn_coordination_patterns": dict(
+            published_single_turn_patterns
+        ),
+        "published_single_turn_parallelism": dict(
+            published_single_turn_parallel
+        ),
+        "published_single_turn_detected_conflicts_4a": dict(
+            published_single_turn_conflict_kinds
+        ),
+        "published_single_turn_stage3_prior_history": dict(
+            published_single_turn_prefix_preserved
+        ),
         "published_result_format_by_phase": _published_result_formats(episodes),
         "paired_trajectory_index_rows": len(paired_trajectories),
         "main_training_turns": len(positive_turns),

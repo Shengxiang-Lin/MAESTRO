@@ -120,6 +120,7 @@ def enumerate_round_candidates(
     seed: int = 17,
     base_episode: dict | None = None,
     max_parallel_tasks: int = 4,
+    preserve_stage3_history: bool = False,
 ) -> list[dict]:
     """Return preflight-valid one-fault scenarios for one feedback round.
 
@@ -170,11 +171,12 @@ def enumerate_round_candidates(
     # a later Main may legitimately delegate another observation of that
     # same source. Its result can disagree after a real one-atom fault.
     # The extra report MUST have an accompanying Main assignment.
-    rechecks = discover_same_source_rechecks(
-        scene, round_plan, products, base_episode=base_episode,
-        atomic_fault_kinds=atomic_fault_kinds,
-        max_parallel_tasks=max_parallel_tasks,
-    )
+    rechecks = ([] if preserve_stage3_history else
+        discover_same_source_rechecks(
+            scene, round_plan, products, base_episode=base_episode,
+            atomic_fault_kinds=atomic_fault_kinds,
+            max_parallel_tasks=max_parallel_tasks,
+        ))
     # Method C: one old report is corrupted, actual descendants execute
     # BEFORE a clean late recheck reveals the discrepancy. Only candidates
     # with an already-dispatched intermediate consumer are meaningful.
@@ -235,9 +237,9 @@ def enumerate_round_candidates(
     # True history-first discovery: anchor previous public keys before
     # deciding which erroneous newest records to synthesize. Reserve at
     # most one B candidate per feedback round, retaining A fault variety.
-    handoffs = discover_handoffs(
+    handoffs = ({} if preserve_stage3_history else discover_handoffs(
         scene, round_plan, products, base_episode=base_episode,
-    )
+    ))
     history = {}
     for tid, kind, variant in ordered:
         plan = handoffs.get(tid)
@@ -366,6 +368,7 @@ def expand_all_rounds(
     seed: int,
     base: dict[str, dict] | None = None,
     max_parallel_tasks: int = 4,
+    preserve_stage3_history: bool = False,
 ) -> list[dict]:
     """Expand each historical feedback round into eligible independent trials."""
     expanded = []
@@ -380,6 +383,7 @@ def expand_all_rounds(
             seed=seed,
             base_episode=(base or {}).get(scene["task_id"]),
             max_parallel_tasks=max_parallel_tasks,
+            preserve_stage3_history=preserve_stage3_history,
         )
         for child in children:
             child["index"] = len(expanded)

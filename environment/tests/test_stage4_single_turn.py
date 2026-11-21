@@ -14,7 +14,7 @@ from environment.untrusted_orchestration.offline_pipeline import (
     author_branch_reports, author_branch_main,
 )
 from environment.untrusted_orchestration.scenario.single_turn_selection import (
-    select_single_turn_candidates,
+    select_single_turn_candidates, coordination_pattern, evidence_relation,
 )
 from environment.tests.test_untrusted_orchestration import sample
 
@@ -44,6 +44,24 @@ class SingleTurnBranchTests(unittest.TestCase):
         self.assertTrue(current["result"]["pending"])
         self.assertEqual(current["result"]["subtask_results"], [])
         self.assertFalse(episode["recovered"])
+
+    def test_original_prior_clean_dispatches_and_reports_are_unchanged(self):
+        target = self.scene["macro_graph"]["reference_waves"][1][0]
+        episode, _, audit = build_branch(
+            self.scene, self.reports, self.clean, branch_round=3,
+            faults=[Fault(target, "missing")], single_turn=True,
+        )
+        self.assertTrue(audit["stage3_prior_history_preserved"])
+        assert episode["trajectory"]
+        original = self.clean["trajectory"][0]
+        previous = episode["trajectory"][0]
+        self.assertEqual(original["params"], previous["params"])
+        self.assertEqual(
+            [r.get("finish_result") for r in
+             original["result"]["subtask_results"]],
+            [r.get("finish_result") for r in
+             previous["result"]["subtask_results"]],
+        )
 
     def test_stage4b_c_publish_one_turn_without_terminal_gold_recovery(self):
         task = self.scene["macro_graph"]["reference_waves"][0][0]
@@ -92,6 +110,17 @@ class SingleTurnBranchTests(unittest.TestCase):
                              summary["single_turn_accepted"])
             self.assertEqual(summary["published_episodes"],
                              summary["single_turn_accepted"])
+            self.assertEqual(summary[
+                "published_single_turn_stage3_prior_history"
+            ], {"preserved": summary["single_turn_accepted"]})
+            self.assertEqual(
+                sum(summary["published_single_turn_evidence_relations_4a"].values()),
+                summary["single_turn_accepted"],
+            )
+            self.assertEqual(
+                sum(summary["published_single_turn_coordination_patterns"].values()),
+                summary["single_turn_accepted"],
+            )
             rows = [json.loads(line) for line in
                     (output / "main_turns.jsonl").read_text().splitlines()]
             episodes = [json.loads(line) for line in
@@ -105,6 +134,24 @@ class SingleTurnBranchTests(unittest.TestCase):
                 step for step in ep["trajectory"]
                 if step["attempt"] >= ep["branch_round"]
             ]) == 1 for ep in episodes))
+            original_waves = self.scene["macro_graph"]["reference_waves"]
+            # No fabricated source recheck, new historical Main dispatch or
+            # extra Sub-Agent report in either clean or latest batch.
+            for ep in episodes:
+                for index, step in enumerate(ep["trajectory"][:-1]):
+                    self.assertEqual(
+                        len(step["params"]["tasks"]),
+                        len(original_waves[index]),
+                    )
+            index_rows = [
+                json.loads(line) for line in
+                (output / "round_index.jsonl").read_text().splitlines()
+            ]
+            self.assertTrue(all(
+                row["latest_subagent_task_ids"] ==
+                original_waves[row["main_decision_round"] - 2]
+                for row in index_rows
+            ))
 
 
 def trial(i, kind="wrong_retrieval"):
@@ -156,6 +203,62 @@ class SingleTurnSelectionTests(unittest.TestCase):
         self.assertNotIn(3, selected)
         self.assertEqual(rows[1]["selection_reason"], "duplicate_public_issue_and_action")
         self.assertEqual(stats["single_turn_actionable"], 2)
+
+    def test_independent_cross_source_and_same_source_are_not_conflated(self):
+        independent = [{
+            "kind": "explicit_independent_claim_disagreement",
+            "latest_round": 1,
+            "claim": {"subject": "Project-X", "attribute": "owner"},
+        }]
+        same_source = [{
+            "kind": "cross_round_report_disagreement",
+            "latest_round": 1,
+            "comparison_kind": "same_query_result_set",
+        }]
+        self.assertEqual(
+            evidence_relation([], independent),
+            "independent_source_claim_conflict",
+        )
+        self.assertEqual(
+            evidence_relation([], same_source),
+            "same_source_repeated_query_conflict",
+        )
+        self.assertNotEqual(
+            evidence_relation([], independent),
+            evidence_relation([], same_source),
+        )
+
+    def test_utility_identifies_real_parallel_repair_and_continuation(self):
+        plan = [{"dispatch": [{"assignment_id": "a"}, {"assignment_id": "b"}],
+                 "evidence_requests": [
+                     {"operation": "verify_conflicting_evidence"},
+                     {"operation": "retrieve_required_evidence"},
+                 ]}]
+        self.assertEqual(coordination_pattern(plan)[0], "verify_and_advance")
+        self.assertEqual(coordination_pattern([])[0], "single_task")
+
+    def test_selector_balances_relations_before_repeating_easy_variants(self):
+        plans = [trial(i, "fabricated_claim") for i in range(4)]
+        audits = [journal(f"local variation {i}") for i in range(3)]
+        other = journal(None)
+        other["private_audit"]["runtime"]["detected_conflicts"] = [{
+            "kind": "explicit_independent_claim_disagreement",
+            "latest_round": 1,
+        }]
+        audits.append(other)
+        chosen, rows, stats = select_single_turn_candidates(
+            plans, audits, target_main_turns=2,
+            max_selected_per_round=None, seed=17,
+        )
+        selected_relations = {
+            row["evidence_relation"] for row in rows
+            if row["candidate_index"] in chosen
+        }
+        self.assertEqual(
+            selected_relations,
+            {"lookup_key_disagreement", "independent_source_claim_conflict"},
+        )
+        self.assertEqual(sum(stats["selected_evidence_relations"].values()), 2)
 
     def test_budget_one_and_missing_reports_are_separate_faults(self):
         planned = [trial(0, "no_result"), trial(1, "result_summary_conflict")]

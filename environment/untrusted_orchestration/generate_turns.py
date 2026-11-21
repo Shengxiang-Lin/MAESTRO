@@ -535,6 +535,7 @@ def generate_turns(
             delayed_evidence_probability=delayed_evidence_probability,
             seed=seed, base=base,
             max_parallel_tasks=max_parallel_tasks,
+            preserve_stage3_history=(decision_unit == "single_turn"),
         )
     if decision_unit == "single_turn":
         # The experiment belongs to the *latest received* Sub-Agent batch.
@@ -1365,7 +1366,10 @@ def generate_turns(
         "pipeline": "maestro_untrusted_orchestration",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
-        "selection_strategy": selection_strategy,
+        "selection_strategy": (
+            "round_relation_action_balanced" if decision_unit == "single_turn"
+            else selection_strategy
+        ),
         "max_diagnostics_per_scene": max_diagnostics_per_scene,
         "round_sampling_strategy": round_sampling_strategy,
         "max_post_fork_rounds": max_post_fork_rounds,
