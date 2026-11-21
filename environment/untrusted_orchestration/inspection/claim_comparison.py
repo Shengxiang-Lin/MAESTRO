@@ -183,6 +183,9 @@ _SCOPE_KEYS = {
     "observed_at", "observation_date", "observation_year", "timestamp",
     "valid_from", "valid_to", "valid_scope", "effective_date",
     "period", "period_start", "period_end", "record_version", "version",
+    # One entity may have several independent observations citing a shared
+    # upstream source row. Distinct observation IDs are distinct scopes.
+    "observation_id",
 }
 
 
