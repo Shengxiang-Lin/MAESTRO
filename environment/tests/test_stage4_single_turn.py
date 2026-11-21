@@ -57,6 +57,8 @@ class SingleTurnBranchTests(unittest.TestCase):
         self.assertEqual(len(turns), 1)
         self.assertEqual(final_episode["trajectory"][-1]["result"]["subtask_results"], [])
         self.assertEqual(turns[0]["round"], 2)
+        self.assertIsNone(final_audit["decision_reward_replay_error"])
+        self.assertEqual(len(final_audit["decision_reward_states"]), 1)
 
 
 def trial(i, kind="wrong_retrieval"):
