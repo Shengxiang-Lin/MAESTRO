@@ -1,0 +1,77 @@
+# OmniGAIA Final-100: MAESTRO Stage2 Global-GRPO Qwen3-8B LoRA vs O1 base.
+# Run from the repository root AFTER training finishes and GPU 1 is free:
+#
+#   mkdir -p logs/nohup
+#   nohup python -u baseline/orchestra-o1/bench_orchestra_o1_omnigaia.py \
+#     --config baseline/orchestra-o1/config/omnigaia/final/orchestra_o1_omnigaia_maestro_grpo_qwen37_flash.yaml \
+#     > logs/nohup/bench_omnigaia_o1_maestro_grpo_qwen37_flash_final.log 2>&1 &
+#
+# No MODEL_PATH/ADAPTER_PATH exports or changes to config/model_config.yaml needed.
+# The trainer saves the adapter at the path below after successful completion.
+# Stop the separate training-time `serve-vllm` on GPU 1 before this evaluation.
+main_model: "qwen3-8b-maestro-grpo-lora"
+sub_models:
+  - "qwen3.7-flash"
+
+# Self-contained local model entry. This does not alter the DA-GRPO baseline
+# service (port 8811) or the untrained Qwen3-8B base service (port 8803).
+models:
+  qwen3-8b-maestro-grpo-lora:
+    backend: vllm
+    model_path: "base_models/Qwen3-8B"
+    lora_adapter_path: "workspace/maestro_8b/checkpoints/stage2-global-grpo/final_adapter"
+    served_model_name: "qwen3-8b-maestro-grpo-lora"
+    lora_base_served_name: "qwen3-8b-maestro-grpo-base"
+    max_lora_rank: 32
+    host: "127.0.0.1"
+    port: 8812
+    gpus: [1]
+    tensor_parallel_size: 1
+    dtype: "bfloat16"
+    gpu_memory_utilization: 0.70
+    max_model_len: 16384
+    max_num_seqs: 4
+    max_num_batched_tokens: 4096
+    max_completion_tokens: 4096
+    temperature: 0.6
+    top_p: 0.95
+    reasoning_parser: "qwen3"
+    enforce_eager: true
+    reuse_existing: true
+    auto_start: true
+    startup_timeout: 900
+    shutdown_on_exit: true
+    log_file: "logs/vllm/qwen3-8b-maestro-grpo-lora.log"
+    env:
+      VLLM_USE_FLASHINFER_SAMPLER: "0"
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true
+
+search:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+browse:
+  provider: "dashscope"
+  model: "qwen3.7-flash"
+tool_models:
+  image_analysis: "qwen3.7-flash"
+  audio_analysis: "qwen3.5-omni-flash"
+  video_vision: "qwen3.7-flash"
+  video_audio: "qwen3.5-omni-flash"
+  video_summary: "qwen3.7-flash"
+
+evaluation_model: "qwen3.7-plus"
+trace_summary_model: "qwen3.7-plus"
+
+dataset_type: "OmniGAIA"
+dataset_path: "data/OmniGAIA/test_metadata.jsonl"
+attachments_dir: "data/OmniGAIA"
+level_filter: null
+task_ids_file: "data/OmniGAIA/splits/final_100_ids.txt"
+max_tasks: null
+max_attempts: 10
+max_concurrency: 10
+
+result_folder: "logs/omnigaia_final/orchestra_o1_omnigaia_maestro_grpo_qwen37_flash"
+trajectory_folder: "logs/omnigaia_final/orchestra_o1_omnigaia_maestro_grpo_qwen37_flash/trajectories"
