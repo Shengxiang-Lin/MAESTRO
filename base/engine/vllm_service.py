@@ -217,7 +217,21 @@ class VLLMServiceManager:
         if recorded_base and Path(str(recorded_base)).is_absolute():
             expected = Path(str(recorded_base))
             actual = Path(base_model_path)
-            if actual.is_absolute() and expected.exists() and actual.exists():
+            # PEFT records the base model path as it was on the TRAINING host.
+            # A relocated adapter can point under /root on another machine,
+            # where Path.exists() raises PermissionError rather than False.
+            # Only compare path identity when that old location is accessible.
+            try:
+                expected_available = expected.exists()
+            except PermissionError:
+                expected_available = False
+                logger.warning(
+                    f"[vLLM] {name}: recorded LoRA training base {expected} "
+                    "is inaccessible on this host; skipping old-path identity "
+                    f"check and using configured base {actual}. "
+                    "Verify it contains the same base model as training."
+                )
+            if actual.is_absolute() and expected_available and actual.exists():
                 if expected.resolve() != actual.resolve():
                     raise ValueError(
                         f"vLLM model {name!r}: adapter was trained for "
