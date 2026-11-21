@@ -536,6 +536,17 @@ def generate_turns(
             seed=seed, base=base,
             max_parallel_tasks=max_parallel_tasks,
         )
+    if decision_unit == "single_turn":
+        # The experiment belongs to the *latest received* Sub-Agent batch.
+        # An earlier poisoned report discovered much later is a different
+        # research setting and must not be silently mixed into this dataset.
+        planned = [
+            item for item in planned
+            if (item["scenario_plan"].get("blueprint") !=
+                "delayed_consumed_error_recovery")
+        ]
+        for index, item in enumerate(planned):
+            item["index"] = index
     if overwrite and output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
