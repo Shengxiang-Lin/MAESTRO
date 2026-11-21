@@ -25,7 +25,7 @@ class CorroborationPlanTests(unittest.TestCase):
         from environment.untrusted_orchestration.inspection.evidence_affordances import (
             analyze_scene_evidence_affordances,
         )
-        test_scene = current_scene(0, "hard")
+        test_scene = current_scene(1, "hard")
         audit = analyze_scene_evidence_affordances(test_scene)
         sibling_pairs = [
             row for row in audit["candidate_relationships"]
