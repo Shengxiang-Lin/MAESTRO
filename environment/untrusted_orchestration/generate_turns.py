@@ -110,7 +110,6 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
     directory = Path(__file__).resolve().parent
     code_files = (
         "runtime/faults.py", "runtime/atomic_faults.py", "reporting/faults.py",
-        "runtime/event_scheduler.py",
         "scenario/scenario_generator.py", "scenario/round_sampling.py",
         "scenario/candidate_exploration.py",
         "scenario/observable_scenarios.py",
