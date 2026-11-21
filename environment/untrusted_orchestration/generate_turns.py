@@ -145,7 +145,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "../../orchestra/base_main_agent.py",
     )
     return {
-        "version": "maestro.untrusted_orchestration.event_engine_v1",
+        "version": "maestro.untrusted_orchestration.single_turn_v1",
         "input_sha256": [_hash_file(path) for path in inputs],
         "source_code_sha256": {
             name: _hash_file(directory / name) for name in code_files
@@ -547,19 +547,17 @@ def generate_turns(
         }
 
     def _progress_bucket(data: dict) -> str:
-        """Execution outcomes are independent of reviewed-turn publication review."""
+        """Classify only the current candidate's next-decision viability."""
         status = data.get("status", "rejected_validation")
-        if status == "recovered":
-            return "recovered"
         if status == "single_turn_planned":
-            return "planned"
-        if status == "incorrect_result_after_actual_propagation":
-            return "incorrect"
+            return "actionable"
+        if status == "no_current_visible_issue":
+            return "no_public_witness"
         if status in {"skipped_unsupported", "rejected_validation"}:
             return "skipped"
-        return "unresolved"
+        return "other"
 
-    def _review_progress(counts: Counter, result: dict) -> None:
+        def _review_progress(counts: Counter, result: dict) -> None:
         status = result.get("status", "failed")
         if status == "accepted":
             counts["accepted"] += 1
@@ -621,11 +619,9 @@ def generate_turns(
             def refresh() -> None:
                 if stage == "simulation":
                     display = {
-                        "recovered": counts["recovered"],
-                        **({"planned": counts["planned"]}
-                           if decision_unit == "single_turn" else {}),
-                        "incorrect": counts["incorrect"],
-                        "unresolved": counts["unresolved"],
+                        "actionable": counts["actionable"],
+                        "no_public_witness": counts["no_public_witness"],
+                        "other": counts["other"],
                         "skipped": counts["skipped"],
                         "written": counts["written"],
                     }
@@ -810,10 +806,8 @@ def generate_turns(
             for row in data["episode"]["trajectory"]
         )
 
-    # One deterministic rank per distinct *recovered execution behavior*.
-    # Reserve candidates remain in the 4A journal until an earlier language
-    # candidate fails; there is never an extra execution replay or LLM call
-    # just for constructing the reserve pool.
+    # Keep viable 4A candidates as reserves if a 4B/4C review fails.
+    # Backfilling never executes a future Sub-Agent or replays a fault.
     by_index = {plan["index"]: plan for plan in planned}
     def make_reports(plan: dict, tick) -> None:
         source = saved(stage_a, plan)
@@ -873,22 +867,17 @@ def generate_turns(
             )
         write(journal, plan, data)
 
-    def published_recovery(index: int) -> bool:
+    def published_decision(index: int) -> bool:
         current = saved(journal, by_index[index])
         return (
             current is not None
-            and current.get("status") in {"recovered", "single_turn_accepted"}
-            and len(current.get("turns", [])) == (
-                1 if decision_unit == "single_turn"
-                else action_count(current)
-            )
+            and current.get("status") == "single_turn_accepted"
+            and len(current.get("turns", [])) == 1
             and not any(review_turn_surface(turn) for turn in current["turns"])
         )
 
-    # Each round starts with max_selected_per_round candidates. On review
-    # failure, try another *distinct* successful 4A replay from the same
-    # question/feedback round. Never spend language budget on a recovered
-    # branch once the round already has its required accepted output(s).
+    # Review selected single-turn candidates and backfill failed reviews
+    # with distinct, already executed 4A public-witness candidates.
     active = set(selected_indices)
     attempted = set()
     initial_selection = set(active)
@@ -924,7 +913,7 @@ def generate_turns(
         attempted.update(active)
         next_active = set()
         successful = sum(
-            published_recovery(i) for i in attempted
+            published_decision(i) for i in attempted
         )
         remaining = (max(0, target_main_turns - successful)
                      if target_main_turns is not None else 0)
@@ -939,7 +928,7 @@ def generate_turns(
             for row in selection_rows
             if row["candidate_index"] in attempted
             and row.get("selection_purpose") == "positive"
-            and not published_recovery(row["candidate_index"])
+            and not published_decision(row["candidate_index"])
         }
         pools = defaultdict(list)
         for row in selection_rows:
@@ -956,7 +945,7 @@ def generate_turns(
             (row["question_id"], row["feedback_round"])
             for row in selection_rows
             if row["candidate_index"] in attempted
-            and published_recovery(row["candidate_index"])
+            and published_decision(row["candidate_index"])
         )
         keys = sorted(pools, key=lambda key: (
             key not in failed_keys, accepted_by_round[key[:2]], key
@@ -1069,7 +1058,7 @@ def generate_turns(
     published_rows = [
         row for row in selection_rows
         if row.get("candidate_index") in attempted
-        and published_recovery(row["candidate_index"])
+        and published_decision(row["candidate_index"])
     ]
     selection_stats["published_answer_impact_distribution"] = dict(sorted(
         Counter(row.get("answer_impact") or "not_evaluated"
@@ -1209,13 +1198,8 @@ def generate_turns(
             f"{summary['completed_branches']}/{summary['candidate_trials']} "
             f"| feedback rounds={summary['rounds_extracted_from_base']} "
             f"| selected={summary['candidates_selected_for_language_review']} "
-            + (f"| 4A actionable={summary['single_turn_actionable']} "
-               if decision_unit == "single_turn"
-               else f"| execution recovered={summary['execution_recovered_branches']} ")
-            + f"| incorrect={summary['incorrect']} "
-            + (f"| accepted branches={summary['single_turn_accepted']} "
-               if decision_unit == "single_turn"
-               else f"| reviewed branches={summary['recovered']} ")
-            + f"| reviewed turns={summary['main_training_turns']}"
+            f"| 4A actionable={summary['single_turn_actionable']} "
+            f"| accepted decisions={summary['single_turn_accepted']} "
+            f"| reviewed turns={summary['main_training_turns']}"
         )
     return summary

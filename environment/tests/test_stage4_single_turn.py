@@ -104,7 +104,7 @@ class SingleTurnBranchTests(unittest.TestCase):
             )
             self.assertEqual(summary["decision_unit"], "single_turn")
             self.assertGreaterEqual(summary["single_turn_accepted"], 1)
-            self.assertEqual(summary["recovered"], 0)
+            self.assertEqual(summary["decision_unit"], "single_turn")
             self.assertEqual(summary["main_training_turns"],
                              summary["single_turn_accepted"])
             self.assertEqual(summary["published_episodes"],
