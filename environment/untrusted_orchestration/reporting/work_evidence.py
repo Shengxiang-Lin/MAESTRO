@@ -29,6 +29,13 @@ _COUNT = re.compile(
     r"and reported (" + _VALUE + r")\."
 )
 
+# A complete source-filter result, not a sampled preview. This is a
+# Main-visible report claim whose consistency is checked against Result.
+_FILTERED_CASES = re.compile(
+    r"The executed filter retained exactly these case identifiers: "
+    r"(\\[[^\\]\\n]*\\])\\."
+)
+
 
 def _scalar(value):
     if type(value) in {str, int, float}:
@@ -48,6 +55,21 @@ def _unique_support_match(rows, refs):
 def observed_work_checks(step: dict, inputs: list, output) -> list[dict]:
     """Describe observable inputs and outputs at the attempted operator."""
     kind = step["op"]
+    if (kind in {"filter_eq", "filter_gte"}
+            and len(inputs) == 1
+            and "case_id" in output.columns
+            and "case_id" in inputs[0].columns
+            and len(output.rows) <= 8
+            and all(type(row["values"].get("case_id")) is str
+                    for row in output.rows)):
+        # The actual attempted filter output is complete here, even when
+        # a fault changes it. Never infer the clean or correct candidate set.
+        return [{
+            "kind": "filtered_case_keys",
+            "case_ids": sorted({
+                row["values"]["case_id"] for row in output.rows
+            }),
+        }]
     if kind == "join" and len(inputs) == 2 and len(output.rows) == 1:
         refs = set(output.rows[0]["support"])
         a = _unique_support_match(inputs[0].rows, refs)
@@ -128,7 +150,12 @@ def public_work_clauses(observed: list[dict]) -> list[str]:
     for step in observed:
         for item in step.get("public_work_checks", []):
             kind = item["kind"]
-            if kind == "association":
+            if kind == "filtered_case_keys":
+                clauses.append(
+                    "The executed filter retained exactly these case identifiers: "
+                    + json.dumps(item["case_ids"], ensure_ascii=False) + "."
+                )
+            elif kind == "association":
                 clauses.append(
                     "For the record association, I paired key "
                     + json.dumps(item["left"], ensure_ascii=False)
@@ -155,6 +182,34 @@ def public_work_clauses(observed: list[dict]) -> list[str]:
     # The final attempted derivation is usually the one just delegated.
     # Bound prose size while keeping recently executed checks observable.
     return clauses[-3:]
+
+
+def visible_filter_discrepancy(
+    public_text: str, delivered_case_ids: set[str],
+) -> str | None:
+    """Compare only *reported* complete filter sets with delivered IDs.
+
+    A final case from discovery must belong to each executed filter set.
+    The clean truth, private World, and fault kind never enter this check.
+    Absence of a complete set is unknown rather than a conflict.
+    """
+    for match in _FILTERED_CASES.finditer(public_text):
+        try:
+            parsed = json.loads(match.group(1))
+        except ValueError:
+            continue
+        if (not isinstance(parsed, list)
+                or not all(type(value) is str for value in parsed)
+                or len(parsed) != len(set(parsed))):
+            continue
+        extra = sorted(delivered_case_ids - set(parsed))
+        if extra:
+            return (
+                "The reported final case identifiers " + ", ".join(extra[:4])
+                + " were not among the explicitly reported completed filter "
+                "results. Verify the returned candidates and their filter."
+            )
+    return None
 
 
 def visible_work_discrepancy(public_text: str) -> str | None:
