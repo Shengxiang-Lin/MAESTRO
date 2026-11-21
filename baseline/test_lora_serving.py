@@ -47,6 +47,38 @@ class TestOnlineLoRA(unittest.TestCase):
                     f"data/OmniGAIA/splits/{'pretest_60' if phase == 'pretest' else 'final_100'}_ids.txt",
                 )
 
+    def test_maestro_global_grpo_uses_shared_model_registry(self):
+        """Final benchmark selects a registered LoRA without local overrides."""
+        registry = yaml.safe_load(
+            (ROOT / "config/model_config.yaml").read_text(encoding="utf-8")
+        )["models"]
+        name = "qwen3-8b-maestro-grpo-lora"
+        service = registry[name]
+        self.assertEqual(service["model_path"], "base_models/Qwen3-8B")
+        self.assertEqual(
+            service["lora_adapter_path"],
+            "workspace/maestro_8b/checkpoints/stage2-global-grpo/checkpoint-200",
+        )
+        self.assertEqual(service["gpus"], [2])
+        self.assertEqual(service["port"], 8812)
+        self.assertEqual(service["gpu_memory_utilization"], 0.90)
+        self.assertEqual(service["max_model_len"], 16384)
+        self.assertTrue(
+            service["extra_body"]["chat_template_kwargs"]["enable_thinking"]
+        )
+        benchmark_path = ROOT / (
+            "baseline/orchestra-o1/config/omnigaia/final/"
+            "orchestra_o1_omnigaia_maestro_grpo_qwen37_flash.yaml"
+        )
+        benchmark = yaml.safe_load(benchmark_path.read_text(encoding="utf-8"))
+        self.assertEqual(benchmark["main_model"], name)
+        self.assertEqual(benchmark["sub_models"], ["qwen3.7-flash"])
+        self.assertNotIn("models", benchmark)
+        self.assertEqual(
+            benchmark["task_ids_file"],
+            "data/OmniGAIA/splits/final_100_ids.txt",
+        )
+
     def test_adapter_rank_validation_and_launch_command(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
