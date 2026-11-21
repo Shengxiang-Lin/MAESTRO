@@ -50,7 +50,10 @@ class CanonicalStagePathsTests(TestCase):
         scenes = pilot / "stage1" / "questions" / "scenes.jsonl"
         self.assertEqual(subtask["scenes_path"], scenes)
         self.assertEqual(main["scenes_path"], scenes)
-        self.assertEqual(stage4["scenes_path"], scenes)
+        # Stage 4 consumes ONLY reviewed and published Stage-3 Scenes.
+        self.assertEqual(
+            stage4["scenes_path"], pilot / "stage3" / "accepted_scenes.jsonl",
+        )
         self.assertEqual(
             main["reports_path"], reports["output_dir"] / "subtasks.jsonl",
         )
