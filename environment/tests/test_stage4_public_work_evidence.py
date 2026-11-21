@@ -19,7 +19,7 @@ from environment.untrusted_orchestration.trajectory_builder import build_branch
 from environment.untrusted_orchestration.state_machine import (
     ExecutionState, deterministic_report,
 )
-from environment.tests.test_stage4_history_first import _scene
+from environment.tests.stage4_fixtures import source_pair_scene
 from environment.tests.stage4_fixtures import sample
 
 
@@ -89,7 +89,7 @@ class PublicWorkEvidenceTests(unittest.TestCase):
         self.assertIsNone(visible_work_discrepancy(clean_clause))
 
     def test_completed_attempt_can_admit_failed_extraction_in_natural_text(self):
-        scene, parent, child = _scene()
+        scene, parent, child = source_pair_scene()
         state = ExecutionState(scene, {})
         parent_attempt = state.register("parent")
         state.set_public_report("parent", deterministic_report(
@@ -118,7 +118,7 @@ class PublicWorkEvidenceTests(unittest.TestCase):
         self.assertEqual(status["status"], "accepted")
 
     def test_done_but_incomplete_is_really_llm_authored(self):
-        scene, parent, child = _scene()
+        scene, parent, child = source_pair_scene()
         state = ExecutionState(scene, {})
         state.register("parent")
         partial = state.register(
