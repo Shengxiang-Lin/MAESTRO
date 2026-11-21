@@ -1,4 +1,4 @@
-# Stage-4 pilot: short, causally replayed single-fault branches.
+# Stage-4 pilot: one Main next-decision per source-grounded latest fault.
 # MAESTRO trusted evidence -> untrusted Main decision training.
 # Pilot: first 10 Stage-1 Scenes + reviewed Stage-2 reports and Stage-3 clean episodes.
 # Stage 4 checks and reuses the actual Stage-3 Clean Reference.
@@ -20,7 +20,7 @@ generation:
   # Enumerate executable one-atom variants with provenance-grounded distractors.
   max_candidates_per_round: null  # enumerate every executable one-atom fault
   max_distractors_per_fault: null  # try all source-backed distractor variants
-  max_selected_per_round: null  # retain all causally distinct recovered behaviors
+  max_selected_per_round: null  # retain distinct public-witness decisions
   target_main_turns: 10000  # global positive Main-decision budget, not episode count
   atomic_fault_kinds:
     - no_result

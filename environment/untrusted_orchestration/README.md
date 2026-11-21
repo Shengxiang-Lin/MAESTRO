@@ -26,12 +26,12 @@ citation, hidden Gold in the Main prompt, or post-decision recovery rollout.
 
 - scenario/observable_scenarios.py: canonical two-family taxonomy and
   scenario feasibility checks
-- scenario/candidate_exploration.py: active single-turn scenario-first
-  enumeration; older multi-round recovery is isolated behind an explicit
-  non-single-turn path
+- scenario/candidate_exploration.py: single-turn scenario-first fault
+  enumeration only; no multi-round recovery branch
 - runtime/faults.py, runtime/atomic_faults.py: existing atomic mutation and
   actual executable operator replay
-- inspection/ and state_machine.py: Main-visible evidence comparison
+- inspection/history_reports.py: read-only comparisons of delivered reports
+- inspection/ and state_machine.py: Main-visible evidence state
 - runtime/evidence_planning.py: legal Main next-action plan
 - reporting/ and offline_pipeline.py: LLM feedback/decision author and critic
 - scenario/single_turn_selection.py: independent realization check and
@@ -42,7 +42,7 @@ Source independence, modality, same-round vs cross-round and downstream
 dependency status are **attributes** of evidence relations, not extra
 fault kinds. B3 is left empty if no comparable public claims exist.
 
-## v3 baseline and migration
+## Archived baseline and migration
 
 Completed v3: 3,963 candidate trials, 1,634 actionable candidates,
 1,000 published turns, no published inter-report conflicts, and all
@@ -54,11 +54,11 @@ Use a new output directory because code signatures differ. Confirm
 published A/B1/B2/B3 counts, review acceptance, single-turn output
 contract, no leakage of private labels and frozen Stage 3 history.
 
-The maintained YAML/CLI accepts only `single_turn`. Obsolete
-`recovery_episode`, `max_post_fork_rounds`, `selection_strategy`, and
-`max_diagnostics_per_scene` options are rejected rather than silently
-accepted. Old generated datasets can be inspected without reusing the old
-runtime interface.
+The maintained Stage-4 runner is now exclusively `single_turn`:
+`recovery_episode`, future-event scheduling, historical report augmentation,
+recovery-based selection, and the unused configuration flags were removed.
+Existing older outputs remain archived; they cannot resume through this
+new code signature. Start a fresh output directory.
 
 ## Selection diagnostics (single-turn)
 
