@@ -1484,9 +1484,13 @@ def generate_turns(
             f"{summary['completed_branches']}/{summary['candidate_trials']} "
             f"| feedback rounds={summary['rounds_extracted_from_base']} "
             f"| selected={summary['candidates_selected_for_language_review']} "
-            f"| 4A actionable={summary.get('single_turn_actionable', summary['execution_recovered_branches'])} "
-            f"| incorrect={summary['incorrect']} "
-            f"| accepted branches={summary['single_turn_accepted'] if decision_unit == 'single_turn' else summary['recovered']} "
+            + (f"| 4A actionable={summary['single_turn_actionable']} "
+               if decision_unit == "single_turn"
+               else f"| execution recovered={summary['execution_recovered_branches']} ")
+            + f"| incorrect={summary['incorrect']} "
+            + (f"| accepted branches={summary['single_turn_accepted']} "
+               if decision_unit == "single_turn"
+               else f"| reviewed branches={summary['recovered']} ")
             f"| reviewed turns={summary['main_training_turns']}"
         )
     return summary
