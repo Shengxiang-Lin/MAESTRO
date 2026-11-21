@@ -185,7 +185,7 @@ def _publish(output: Path, planned: list[dict],
                 or (event.get("kind") == "explicit_independent_claim_disagreement"
                     and event.get("conflict_timing") == "delayed")
             ]
-            if history_events:
+            if history_events and status == "recovered":
                 published_recovered_historical_conflicts += 1
                 gaps = {
                     event["latest_round"] - event["older_round"]
@@ -196,7 +196,7 @@ def _publish(output: Path, planned: list[dict],
                 }
                 published_history_gap_distribution.update(gaps)
             causal = data["private_audit"].get("delayed_causal_audit")
-            if causal is not None:
+            if causal is not None and status == "recovered":
                 if (not causal["observable_conflict"]
                         or not causal["impacted_consumers"]
                         or not causal["invalidated_consumers"]

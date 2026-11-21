@@ -6,6 +6,47 @@ and source contracts; Stage 2 supplies reviewed reports; Stage 3 supplies
 the clean reference. Stage 4 runs separate private counterfactual and
 recovery executions and publishes only validated recovery decisions.
 
+## Round-local Main-turn supervision (default config)
+
+The maintained YAML configs set `generation.decision_unit: single_turn`.
+Each accepted Stage-3 feedback round is expanded into several **independent**
+source-grounded one-fault variants. Stage 4A replays only the actual history
+through the latest received Sub-Agent batch, including prior report evidence.
+It selects a candidate **only when the current feedback has a publicly
+observable issue** (missing/partial delivery, Result/Summary disagreement,
+provenance/key/arithmetic inconsistency, or real cross-report disagreement).
+An undetectable wrong value is not presented as a successful detection.
+
+The planner generates precisely **one** next Main `delegate_task` action,
+possibly dispatching several dependency-independent Sub-Agents in parallel.
+The action is frozen; **those Sub-Agents do not execute**, and no later
+recovery turns or terminal Gold outcome are used as acceptance conditions.
+4B authors the reports actually seen *before* this decision; 4C authors and
+reviews the current Main reasoning from that final public history. The
+export contains **one Main turn per accepted fault variant**, not a complete
+recovery Episode. `episodes.jsonl` holds just the visible prefix and pending
+next action for inspection. Its format is `maestro_untrusted_single_turn.v1`.
+
+The old full recovery simulator remains available for offline research by
+setting `decision_unit: recovery_episode` explicitly. Its Episode-level
+acceptance, downstream re-execution and Gold replay metrics are **not**
+claims about new single-turn datasets. Run in a fresh output directory:
+
+```bash
+python -m environment generate-untrusted-turns \\
+  --config environment/configs/untrusted_orchestration_llm_pilot_10.yaml \\
+  --max-scenes 10 --workers 8 --mode llm \\
+  --output-dir environment/data/stage4_round_local_v1_10
+```
+
+The selected fault types remain `no_result`, `report_missing`,
+`incomplete_retrieval`, `done_but_incomplete`, `wrong_retrieval`,
+`wrong_entity_binding`, `computation_error`, `fabricated_claim`, and
+`result_summary_conflict`. Cross-report conflict is an **observable
+relationship** among real received reports, not an additional arbitrary
+fault atom. Metadata such as the injected atom and executable Macro binding
+remains private; the published Main sees only O1 history.
+
 ## Entry point
 
 ```bash
@@ -35,7 +76,7 @@ journals are unchanged. Runtime gains depend on real allocated CPU cores;
 
 ## Global training budget and fine-grained recovery
 
-Stage 4A enumerates all executable grounded faults independently of the
+In legacy `recovery_episode` mode, Stage 4A enumerates all executable grounded faults independently of the
 training budget. After 4A completes, `selection_strategy: global_balanced`
 and `target_main_turns: 10000` choose **entire recovered Episodes**
 whose estimated Main decisions fit that global budget. The budget is
@@ -140,8 +181,10 @@ python -m environment generate-untrusted-turns \\
   --output-dir environment/data/stage4_llm_pilot_10_1000
 ```
 
-Stage 4A remains exhaustive and its results are source-backed; the
+Stage 4A remains exhaustive and its faults are source-backed; the
 global Main-turn budget limits expensive language review after 4A.
+In `single_turn` mode the budget is one decision per candidate, with no
+future recovery replay or Gold-based candidate selection.
 Stage 4B/4C have separate per-report and per-Main-decision atomic
 checkpoints. Rerun the same command without `--overwrite` for a
 signature-checked continuation. Missing or rejected LLM reviews do
