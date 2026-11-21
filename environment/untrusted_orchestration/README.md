@@ -72,6 +72,7 @@ runtime interface.
   as a primary or backfill attempt. An unselected candidate is **not** a
   failed recovery: no future recovery episode is executed.
 
-`summary.json.candidate_screening_outcomes` partitions all trials into
-`selected`, `no_public_witness`, `duplicate`, and `budget_reserve`.
+`summary.json.candidate_screening_outcomes` classifies trials as
+`selected`, `no_public_witness`, `duplicate`, `budget_reserve`, or (when
+present) `target_mismatch`, `no_legal_action`, and `other_unselected`.
 Use this instead of the old `not_execution_recovered` label.
