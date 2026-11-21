@@ -16,7 +16,10 @@ from environment.generate_question.authoring.surface_quality import SCHEMA_LABEL
 SUBJECT_FIELDS = (
     "case_id", "candidate_id", "entry_label", "accession_id",
     "record_key_1", "record_key_2", "marker_code",
-    "project_id", "event_id", "entity_final", "entity_0",
+    # A route identifies the *same candidate mapping* across independent
+    # reference reports. It is not the project-wide subject: one project
+    # legitimately contains several different route candidates.
+    "route_key", "project_id", "event_id", "entity_final", "entity_0",
     "entity_1", "entity_2", "entity_3",
 )
 _SCALAR = (str, int, float, bool)
