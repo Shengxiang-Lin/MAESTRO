@@ -713,10 +713,12 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                        "stage4c_dispatch_validation_rejected",
                    ))
                    else failure)
-    elif execution_outcome == "recovered" and (
+    elif execution_outcome in {"recovered", "single_turn_planned"} and (
         had_report_fallback or had_main_fallback
     ):
         outcome = "language_review_unaccepted"
+    elif execution_outcome == "single_turn_planned":
+        outcome = "single_turn_accepted"
     else:
         outcome = execution_outcome
     # Preserve each individually reviewed Main decision in the PRIVATE
@@ -756,7 +758,10 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
         failure is None and not had_report_fallback and not had_main_fallback
     )
     audit["language_evidence_issues"] = [failure] if failure else []
-    audit["accepted_turns"] = len(turns) if outcome == "recovered" else 0
+    audit["accepted_turns"] = (
+        len(turns) if outcome in {"recovered", "single_turn_accepted"} else 0
+    )
     episode["outcome"] = outcome
     episode["recovered"] = outcome == "recovered"
-    return episode, turns if outcome == "recovered" else [], audit
+    return episode, (turns if outcome in {
+        "recovered", "single_turn_accepted"} else []), audit

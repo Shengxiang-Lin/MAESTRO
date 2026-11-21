@@ -550,6 +550,7 @@ def build_branch(
     sub_model: str = "qwen3-8b", model_alias: str = "model_1",
     on_report_review=None, on_main_review=None,
     validated_reference: tuple[dict, dict] | None = None,
+    single_turn: bool = False,
 ) -> tuple[dict, list[dict], dict]:
     """Returns (public episode, accepted *post-branch* turn labels, audit)."""
     if max_rounds < branch_round or max_parallel_tasks < 1:
@@ -741,9 +742,10 @@ def build_branch(
                     deepcopy(base_episode["trajectory"][branch_round - 2][
                         "result"]["subtask_results"][slot])
                 )
-    before = counterfactual_continuation(
-        state, start_wave_index=branch_round - 1,
-    )
+    before = ({"status": "not_evaluated_single_turn"} if single_turn else
+              counterfactual_continuation(
+                  state, start_wave_index=branch_round - 1,
+              ))
     # All error origins are causal events, not historical rewrites.
     # An old round_fork is simply one atom on the most recent batch.
     scenario_plan = deepcopy(scenario_plan) if scenario_plan else {
@@ -839,11 +841,25 @@ def build_branch(
             stopped = "budget_exhausted"
             break
         scheduling = state.scheduling_state()
+        visible_issues = state.observable_issues()
         observable_issue_snapshots.append({
             "decision_round": round_number,
-            "issues": state.observable_issues(),
+            "issues": visible_issues,
             "private_only": True,
         })
+        if single_turn:
+            # A new sample must be motivated by the most recently delivered
+            # feedback, not an undisclosed Oracle fault or an old unrelated issue.
+            current_witness = any(
+                item.get("reported_round") == branch_round - 1
+                for item in visible_issues
+            ) or any(
+                event.get("latest_round") == branch_round - 1
+                for event in state.active_public_conflicts()
+            )
+            if not current_witness:
+                stopped = "no_current_visible_issue"
+                break
         repairs = [
             tid for tid in scheduling["repair"]
             if len(state.attempts[tid]) <= max_retries and state.ready(tid)
@@ -877,6 +893,9 @@ def build_branch(
             model_alias=model_alias, event_pending=event_pending,
             can_complete=can_complete,
         ))
+        if single_turn and not repairs and not ready:
+            stopped = "no_legal_current_action"
+            break
         if can_complete:
             # A targeted recheck is not proof that two delivered independent
             # claims now agree. Otherwise the simulator could promote a
@@ -1000,6 +1019,20 @@ def build_branch(
             round_number, action, status["mode"],
             kind="delegate", task_ids=batch,
         )
+        if single_turn:
+            # The label is this ONE Main decision. No future Sub-Agent is
+            # executed or hallucinated; this pending handoff has no Result.
+            trajectory.append({
+                "attempt": round_number, "action": "delegate_task",
+                "reasoning": action["reasoning"],
+                "params": deepcopy(action["params"]),
+                "result": {
+                    "subtask_results": [], "total_subtasks": 0,
+                    "all_done": False, "pending": True,
+                },
+            })
+            stopped = "single_turn_planned"
+            break
         # A parallel batch is atomic from Main's perspective: all tasks
         # consume the snapshot that existed BEFORE the batch was launched.
         # No task can secretly use an earlier sibling's new WorkProduct.
@@ -1157,7 +1190,7 @@ def build_branch(
         ))
     ):
         stopped = "language_review_unaccepted"
-    success = stopped == "recovered"
+    success = stopped in {"recovered", "single_turn_planned"}
     # Teacher-side state is computed from the ACTUAL public report text in
     # each returned batch, including injected faults and retry replacements.
     # It is never passed to Main (which still sees only O1 formatted history).
@@ -1181,7 +1214,8 @@ def build_branch(
     )
     episode = {
         "task_id": scene["task_id"], "question": scene["question"],
-        "format": "maestro_untrusted_round_branch.v1",
+        "format": ("maestro_untrusted_single_turn.v1" if single_turn
+                   else "maestro_untrusted_round_branch.v1"),
         "clean_reference_id": clean_identity["clean_reference_id"],
         "branch_round": branch_round,
         "trajectory": trajectory,
@@ -1228,6 +1262,7 @@ def build_branch(
             ) for d in decisions if d.get("decision_kind") == "delegate"
         ),
         "outcome": stopped,
+        "decision_unit": "single_turn" if single_turn else "recovery_episode",
         "accepted_turns": len(turns) if success else 0,
         "private_only": True,
     }
