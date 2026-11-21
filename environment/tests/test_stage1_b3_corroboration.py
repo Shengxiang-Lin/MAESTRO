@@ -92,16 +92,19 @@ class PublicCorroborationTests(unittest.TestCase):
             "scope": {"observations": [{
                 "values": {"project_id": "P1"},
                 "fact_refs": ["scope:F001"],
+                "observation_id": "scope.OBS001",
                 "evidence_origin_id": "origin:scope",
             }]},
             "link_a": {"observations": [{
                 "values": {"route_key": "route:abc", "entity_0": "ENT-A"},
                 "fact_refs": ["link_a:F001"],
+                "observation_id": "link_a.OBS001",
                 "evidence_origin_id": "origin:link_a",
             }]},
             "link_b": {"observations": [{
                 "values": {"route_key": "route:abc", "entity_0": "ENT-A"},
                 "fact_refs": ["link_b:F001"],
+                "observation_id": "link_b.OBS001",
                 "evidence_origin_id": "origin:link_b",
             }]},
         }
