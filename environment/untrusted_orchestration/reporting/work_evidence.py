@@ -33,7 +33,7 @@ _COUNT = re.compile(
 # Main-visible report claim whose consistency is checked against Result.
 _FILTERED_CASES = re.compile(
     r"The executed filter retained exactly these case identifiers: "
-    r"(\\[[^\\]\\n]*\\])\\."
+    r"(\[[^\]\n]*\])\."
 )
 
 
