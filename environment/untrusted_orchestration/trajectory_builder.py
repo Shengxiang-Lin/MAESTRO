@@ -1210,7 +1210,10 @@ def build_branch(
             else decision_bindings[number]
         )
     visible_claim_state = audit_visible_claim_states(
-        scene, trajectory, task_ids_by_round=report_bindings,
+        scene,
+        [step for step in trajectory
+         if not (step.get("result") or {}).get("pending")],
+        task_ids_by_round=report_bindings,
     )
     episode = {
         "task_id": scene["task_id"], "question": scene["question"],
