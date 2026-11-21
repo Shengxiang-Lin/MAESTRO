@@ -735,7 +735,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
     # Stage4B/4C may replace the original 4A report prose. Refresh reward
     # states using the FINAL reports actually delivered to Main; never train
     # on 4A-only snapshots which might disagree with final visible history.
-    if outcome == "recovered":
+    if outcome in {"recovered", "single_turn_accepted"}:
         from .decision_reward_replay import replay_reward_states
         settings = audit.get("decision_reward_settings") or {}
         try:
