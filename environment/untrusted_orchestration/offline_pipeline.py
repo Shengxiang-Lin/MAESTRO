@@ -255,18 +255,21 @@ def _visibility_issues(
                 missing.append(request["request_id"] + ":missing_status")
         if request["operation"] == "verify_conflicting_evidence":
             verification_focus = request.get("verification_focus") or {}
-            if verification_focus.get("basis") == "result_summary_disagreement":
+            if verification_focus.get("basis") in {
+                "result_summary_disagreement", "intra_result_conflict",
+            }:
                 if confirmed_report_conflicts is None:
-                    from .inspection.claim_comparison import report_claim_conflicts
+                    from .inspection.claim_comparison import public_report_conflicts
                     confirmed_report_conflicts = [
                         {**finding, "observed_round": batch.get("attempt")}
                         for batch in entries
                         for report in batch.get("subtask_results", [])
                         if isinstance(report, dict)
-                        for finding in report_claim_conflicts(report)
+                        for finding in public_report_conflicts(report)
                     ]
                 if not any(
-                    finding["field"] == verification_focus.get("attribute")
+                    finding["kind"] == verification_focus["basis"]
+                    and finding["field"] == verification_focus.get("attribute")
                     and finding["subject"] == verification_focus.get("subject")
                     and (verification_focus.get("observed_round") is None
                          or finding["observed_round"] ==

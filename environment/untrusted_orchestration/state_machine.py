@@ -655,12 +655,21 @@ class ExecutionState:
         Ambiguous multi-record summaries and unparseable values are unknown,
         not contradictions. Never access the clean WorkProduct or Gold.
         """
-        from .inspection.claim_comparison import report_claim_conflicts
+        from .inspection.claim_comparison import public_report_conflicts
         report = self.public_reports.get(task_id) or {}
-        conflicts = report_claim_conflicts(report)
+        conflicts = public_report_conflicts(report)
         if not conflicts:
             return None
         conflict = conflicts[0]
+        if conflict["kind"] == "intra_result_conflict":
+            return (
+                "The returned Result contains conflicting values for "
+                + conflict["field"].replace("_", " ") + " of "
+                + conflict["subject"] + ": " + conflict["result_value"]
+                + " versus " + conflict["summary_value"]
+                + " in two explicitly returned rows. Verify this same-record "
+                "disagreement before using dependent evidence."
+            )
         return (
             "The returned Result and Summary explicitly disagree about "
             + conflict["field"].replace("_", " ") + " for "
@@ -1172,12 +1181,12 @@ class ExecutionState:
 
         # Use the SAME typed public comparator as the runtime detector and
         # Stage-4C critic. An ambiguous multi-row summary gives no focus.
-        from .inspection.claim_comparison import report_claim_conflicts
-        conflicts = report_claim_conflicts(self.public_reports.get(task_id) or {})
+        from .inspection.claim_comparison import public_report_conflicts
+        conflicts = public_report_conflicts(self.public_reports.get(task_id) or {})
         if conflicts and issue == self._visible_report_internal_conflict(task_id):
             claim = conflicts[0]
             return {
-                "basis": "result_summary_disagreement",
+                "basis": claim["kind"],
                 "subject": claim["subject"],
                 "attribute": claim["field"],
                 "observed_round": self.public_report_rounds.get(task_id),

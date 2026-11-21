@@ -198,6 +198,8 @@ def evidence_assignment(state, task_id: str, *, catalog: dict,
         witness = (
             "the Result and Summary of one returned report"
             if verification_focus["basis"] == "result_summary_disagreement"
+            else "two explicit rows in the received Result"
+            if verification_focus["basis"] == "intra_result_conflict"
             else "the already received, conflicting reports"
         )
         objective += (
