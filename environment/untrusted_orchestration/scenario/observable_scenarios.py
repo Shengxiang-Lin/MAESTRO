@@ -47,6 +47,12 @@ _CROSS_REPORT_EVENTS = {
     "cross_round_report_disagreement",
     "explicit_independent_claim_disagreement",
 }
+# An overlap between candidate IDs returned by separate clue searches is
+# not a repeated measurement of one attribute under the SAME query scope.
+_UNSCOPED_IDENTIFIERS = {
+    "case_id", "candidate_id", "marker_code", "entry_label",
+    "accession_id", "record_key_1", "record_key_2",
+}
 
 
 def classify_observable_scenario(issues: list[dict], conflicts: list[dict]) -> dict:
