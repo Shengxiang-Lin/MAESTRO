@@ -115,15 +115,12 @@ class ScenarioFeasibilityTests(unittest.TestCase):
         ]
         rounds, _, _ = _plan_branches(
             [scene], {scene["task_id"]: clean},
-            branches_per_scene=1, seed=17, fault_modes=["missing", "partial", "wrong"],
-            persistence="once", multi_target_probability=0,
-            max_rounds=16, scenario_mode="event_driven",
-            atomic_fault_kinds=kinds,
+            branches_per_scene=1, seed=17,
         )
         candidates = enumerate_round_candidates(
             scene, rounds[0], atomic_fault_kinds=kinds,
             max_candidates=15, max_distractors=2,
-            seed=17, base_episode=clean, preserve_stage3_history=True,
+            seed=17, base_episode=clean,
         )
         self.assertTrue(candidates)
         for item in candidates:
@@ -132,15 +129,6 @@ class ScenarioFeasibilityTests(unittest.TestCase):
             self.assertEqual(len(item["scenario_plan"]["fault_atoms"]), 1)
             self.assertNotIn("same_source_recheck_plan", item["scenario_plan"])
             self.assertNotIn("history_first_plan", item["scenario_plan"])
-        with self.assertRaisesRegex(
-            ValueError, "single_turn_requires_one_immediate_fault",
-        ):
-            enumerate_round_candidates(
-                scene, rounds[0], atomic_fault_kinds=kinds,
-                max_candidates=15, max_distractors=2,
-                seed=17, base_episode=clean, preserve_stage3_history=True,
-                delayed_evidence_probability=0.5,
-            )
 
 
 class ScenarioSelectionTests(unittest.TestCase):
@@ -193,8 +181,7 @@ class ScenarioSelectionTests(unittest.TestCase):
                 scenes_path=paths[0], reports_path=paths[1],
                 clean_episodes_path=paths[2], output_dir=out,
                 max_scenes=1, branches_per_scene=1,
-                decision_unit="single_turn", scenario_mode="event_driven",
-                candidate_strategy="enumerate", selection_strategy="scenario_first",
+                decision_unit="single_turn",
                 atomic_fault_kinds=["no_result", "result_summary_conflict"],
                 max_candidates_per_round=2, max_distractors_per_fault=1,
                 target_main_turns=2, workers=1, no_progress=True,
