@@ -557,7 +557,7 @@ def generate_turns(
             return "skipped"
         return "other"
 
-        def _review_progress(counts: Counter, result: dict) -> None:
+    def _review_progress(counts: Counter, result: dict) -> None:
         status = result.get("status", "failed")
         if status == "accepted":
             counts["accepted"] += 1
