@@ -100,6 +100,7 @@ class CanonicalStagePathsTests(TestCase):
         for config in (
             UNTRUSTED,
             UNTRUSTED.with_name("untrusted_orchestration_llm_pilot_10.yaml"),
+            UNTRUSTED.with_name("untrusted_orchestration_b2_filter_pilot_2.yaml"),
         ):
             with self.subTest(config=config.name):
                 with patch(
