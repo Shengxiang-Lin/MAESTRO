@@ -54,7 +54,7 @@ tests/
 
 /work/environment_parallel_20261104/
 work/
-
+docs/
 # Versioned DA-GRPO training reference config
 !baseline/da-grpo/ds_config.json
 unsloth_compiled_cache/
