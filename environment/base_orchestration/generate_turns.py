@@ -127,6 +127,7 @@ def _rebuild_publication(
 ) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     """Scene journals are authoritative across interrupted multi-file appends."""
     episodes, turns, private, failures = [], [], [], []
+    accepted_scenes = []
     for index, scene in enumerate(scenes):
         file = journal / f"{index:06d}.json"
         if not file.is_file():
@@ -135,6 +136,7 @@ def _rebuild_publication(
         if saved.get("task_id") != scene["task_id"]:
             raise RuntimeError("stage3_journal_scene_order_changed")
         if saved["status"]["status"] == "accepted":
+            accepted_scenes.append(scene)
             episodes.append(saved["episode"])
             turns.extend(saved["turns"])
             private.extend(saved["private_audit"])
@@ -142,6 +144,10 @@ def _rebuild_publication(
             failures.append({
                 "task_id": scene["task_id"], **saved["status"],
             })
+    # Stage 4 must consume only Scenes with accepted reviewed Clean References.
+    # This prevents partial Stage-3 batches from producing missing-reference
+    # rejections just because the original Stage-1 source is larger.
+    _write_jsonl(output_dir / "accepted_scenes.jsonl", accepted_scenes)
     _write_jsonl(output_dir / "episodes.jsonl", episodes)
     _write_jsonl(output_dir / "main_turns.jsonl", turns)
     _write_jsonl(output_dir / "private" / "teacher_alignment.jsonl", private)
@@ -500,6 +506,7 @@ def generate_turns(
         ),
         "public_turns": str(output_dir / "main_turns.jsonl"),
         "public_episodes": str(output_dir / "episodes.jsonl"),
+        "accepted_scenes_file": str(output_dir / "accepted_scenes.jsonl"),
         "private_teacher_alignment": str(
             output_dir / "private" / "teacher_alignment.jsonl"
         ),

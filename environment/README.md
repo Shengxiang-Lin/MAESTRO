@@ -1,94 +1,78 @@
 # MAESTRO environment
 
-This package builds executable, reviewable data for trusted and untrusted
-multi-agent orchestration. Configuration and data directories are organized
-**by function**, not by experimental revision.
+The maintained environment has **four stages and four canonical YAML files**.
+This branch configures one coherent batch of **500 Stage-1 candidate
+ProblemSpecs** under `environment/data/batches/candidate_500/`.
+Older 2/10-scene experimental configuration files are not production entries.
 
-## Canonical pipeline
+## Production commands
+
+Start the local OpenAI-compatible `local-qwen3.5-9b` server on
+`http://127.0.0.1:8807/v1`, and ensure
+`data/world-source/YAGO-4.6` is present. Then run from the repository root:
 
 ```bash
-# Stage 1: questions, synthetic sources, typed Macro dependency graphs
-python -m environment generate-questions \
-  --config environment/configs/questions.yaml
-
-# Stage 2: execute the Macro Oracle, then review Sub-Agent feedback
-python -m environment naturalize-subtasks \
-  --config environment/configs/subagent_reports.yaml
-
-# Stage 3: trusted Main-Agent decisions (frozen reference for Stage 4)
-python -m environment generate-main-turns \
-  --config environment/configs/main_orchestration.yaml
-
-# Stage 4: Main-observable one-fault, single-turn next-decision supervision
-python -m environment generate-untrusted-turns \
-  --config environment/configs/untrusted_orchestration.yaml
+python -m environment generate-questions
+python -m environment quality
+python -m environment naturalize-subtasks
+python -m environment generate-main-turns
+python -m environment generate-untrusted-turns
 ```
 
-Stage 1 uses the maintained output-first Task Plan builder and loads real
-YAGO relations via `generate_question/grounding/yago.py`. Obsolete
-`macro_v3/` synthesizers and the unused `scenarios/` and `sources/`
-packages have been removed. Stage 1 Question Author/Critic and Stage 2–4
-language review use DashScope `qwen3.8-flash`.
+These commands consume `environment/configs/{questions,subagent_reports,
+main_orchestration,untrusted_orchestration}.yaml`, respectively. Stage 1's
+`quality` is a **read-only audit**, not an additional generation stage.
 
-The current Stage 2–4 pilot consumes the first 10 accepted Scenes from
-`environment/data/stage1/questions/scenes.jsonl`, without regenerating
-Stage 1; see `configs/README.md`. Stage 2 deterministically recompiles
-its Oracle every run and keeps separately resumable LLM report journals.
-Stage 4 validates and reuses the Stage 3 Clean Reference when
-`input.clean_episodes` is configured.
+### Batch data dependencies
 
-## Stage 4 supervision
+| Stage | Input | Main output |
+| --- | --- | --- |
+| 1 | YAGO vocabulary + seeded ProblemSpec composer | `stage1/questions/scenes.jsonl` |
+| 2 | Stage-1 **accepted** Scenes | `stage2/subtasks.jsonl`; private `stage2/oracle/` |
+| 3 | Stage-1 accepted Scenes + reviewed Stage-2 reports | `stage3/episodes.jsonl`, `stage3/main_turns.jsonl`, `stage3/accepted_scenes.jsonl` |
+| 4 | Stage-3 accepted Scenes + Stage-2 reports + Stage-3 reviewed Clean References | `stage4/main_turns.jsonl`, private audits |
 
-- `untrusted_orchestration/inspection/visible_claim_extraction.py`: parses explicit
-  typed assertions only from the actually returned Sub-Agent
-  `finish_result.result` and `summary`. Unparseable text remains unknown.
-- `untrusted_orchestration/inspection/visible_claim_state.py`: constructs the
-  per-round Claim–Source–Dependency state and relational evidence graph,
-  including source lineage, ambiguous provenance, observed contradictions,
-  partial deliveries and retry replacement.
-- `private/claim_state_supervision.jsonl`: pre-action state labels for
-  **accepted single-turn next decisions**, not verified global recovery.
-- `private/claim_state_diagnostics.jsonl`: private states for
-  reviewed failures and rejected candidates; these are NOT positive SFT
-  labels.
-- `main_turns.jsonl`: O1-compatible Main input/output; never contains
-  private state, Gold values, injected fault labels or future report text.
+A Stage-1 `generation.target: 500` defines **500 frozen candidate
+ProblemSpecs**, not a promise of 500 Author/Critic-accepted questions.
+Stage-2 report review may reject additional Scenes, and Stage-3 review may
+reject entire trajectories. Each stage publishes only valid output. Stage 3
+rebuilds `accepted_scenes.jsonl` from its complete, accepted scene journals
+so Stage 4 never silently treats an unreviewed Stage-3 episode as a reference.
 
-The state representation is *evidential*, not a hidden truth oracle:
-`unverified` and `disputed` do not mean the source is incorrect; only
-explicit independent provenance may establish `corroborated`. Task
-dependencies are teacher-side structural annotations, never invented
-visible evidence. Private Oracle/Gold values stay outside Main prompts;
-Stage 4 does not claim to have executed a future task or proved recovery.
+Stage 4 freezes historical Stage-3 dispatches and prior returned reports,
+applies **one** atomic fault to the current feedback batch, checks only
+**Main-visible** issues, and publishes **one** reviewed next `delegate_task`
+decision. It is not a multi-round recovery rollout. Stage 4's
+`target_main_turns: 2000` is a **global positive decision budget**, not
+the number of input Scenes or a guaranteed yield; `max_candidates_per_round`
+and `max_distractors_per_fault` deliberately bound coverage.
 
-Stage 4 preserves the exact Stage-3 history preceding the latest
-completed Sub-Agent batch and applies **one atomic fault per candidate**.
-It first targets Main-observable A (evidence insufficiency) or B1/B2/B3
-(evidence inconsistency), then validates the realized public witness before
-selecting one legal next Main `delegate_task` decision. The future batch is
-not executed: `single_turn_accepted` means a reviewed next-step label, **not**
-globally recovered execution. Failed, unobservable, duplicate and budget-reserve
-candidates remain private. The maintained YAML/CLI does not accept the retired
-multi-round recovery mode.
+### Resume, validation and non-fallback policy
 
-## Functional packages
+The four output directories and per-stage journals are independent. Do not
+reuse a previous pilot output directory with different source files, YAML or
+code signatures. Failures and insufficient evidence remain explicit; never
+promote template or fallback reports to positive LLM reviewed training data.
+Inspect each stage's `summary.json` before starting the next command:
 
-- `generate_question/`: Stage-1 source construction, questions, operators
-- `implement_subtask/`: Stage-2 executable oracle and reviewed messages
-- `base_orchestration/`: Stage-3 legal trusted Main dispatch and O1 formatting
-- `untrusted_orchestration/`: Stage-4 one-atom latest-feedback faults,
-  Main-visible issue detection, one-step delegation, review and publication
-- `configs/`: one stable YAML per function, shared output layout
+- Stage 1: `generated`, `rejected`, `final_scenes`
+- Stage 2: `oracle_accepted_scenes`, accepted reviewed reports, failures
+- Stage 3: `accepted_scenes`, `rejected_scenes`, `fully_llm_reviewed_scenes`
+- Stage 4: `trusted_prefixes_rejected`, `available_scenarios`,
+  `published_scenario_types`, `main_training_turns`
 
+`Stage 4 status: done` means candidate processing ended, **not** that
+every candidate passed language review or that recovery succeeded globally.
 
-## Unified base dataset (separate from training adapters)
+## Packages
 
-`python -m environment.data_export` publishes unsplit generic
-`cases.jsonl`, `decisions.jsonl`, and
-`private/decision_labels.jsonl` into `environment/data/unified/`.
-It does **not** produce DA-SFT/DA-GRPO Parquets or select
-train/val/test Scenes. See `environment/data_export/README.md`.
+- `generate_question/` — Stage 1 task plans, sources, evidence, auditing
+- `implement_subtask/` — Stage 2 Oracle and independently reviewed reports
+- `base_orchestration/` — Stage 3 frozen DAG dispatch, public O1 actions
+- `untrusted_orchestration/` — Stage 4 one-fault scenario-first decisions
+- `data_export/` — generic dataset export, not a train/test splitting policy
 
-Each baseline invokes its own `prepare_data.py`, chooses a frozen Scene
-split, filters eligible reference actions and writes its own
-`baseline/<method>/data/` training files.
+For exact caps, paths, and safe rollout advice see
+[`configs/README.md`](configs/README.md). `python -m environment.data_export`
+produces generic `cases.jsonl`, `decisions.jsonl` and private labels; each
+baseline is responsible for scene-disjoint splits and its own training adapter.

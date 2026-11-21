@@ -63,8 +63,7 @@ def load_config(path: str | Path = DEFAULT_CONFIG) -> dict:
 
 
 _REPORTING_FIELDS = {
-    "source_subtasks", "source_scene_index", "output_dir",
-    "api_base", "model", "critic_api_base", "critic_model",
+    "output_dir", "api_base", "model", "critic_api_base", "critic_model",
     "api_key_env", "critic_api_key_env", "workers",
     "max_revisions", "timeout", "max_scenes", "no_progress", "overwrite", "flush_every",
 }
@@ -83,8 +82,7 @@ def load_reporting_config(path: str | Path = DEFAULT_CONFIG) -> dict:
     unknown = set(values) - _REPORTING_FIELDS
     if unknown:
         raise ValueError(f"Unknown reporting keys: {sorted(unknown)}")
-    for name in ("source_subtasks", "source_scene_index", "output_dir",
-                 "api_base", "model"):
+    for name in ("output_dir", "api_base", "model"):
         if not values.get(name):
             raise ValueError(f"reporting.{name} required")
     for name in ("workers", "timeout"):
@@ -103,11 +101,13 @@ def load_reporting_config(path: str | Path = DEFAULT_CONFIG) -> dict:
     flush_every = values.get("flush_every", 1)
     if type(flush_every) is not int or flush_every < 1:
         raise ValueError("reporting.flush_every must be positive")
+    report_dir = _resolve(values["output_dir"])
+    oracle_dir = report_dir / "oracle"
     return {
         "flush_every": flush_every,
-        "source_subtasks": _resolve(values["source_subtasks"]),
-        "source_scene_index": _resolve(values["source_scene_index"]),
-        "output_dir": _resolve(values["output_dir"]),
+        "source_subtasks": oracle_dir / "subtasks.jsonl",
+        "source_scene_index": oracle_dir / "scene_index.jsonl",
+        "output_dir": report_dir,
         "api_base": values["api_base"],
         "model": values["model"],
         "critic_api_base": values.get("critic_api_base"),

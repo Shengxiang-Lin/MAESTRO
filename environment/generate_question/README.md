@@ -1,86 +1,58 @@
-# Stage 1: current output-first Task Plan only
+# Stage 1 — executable Question and evidence-scene generation
 
-`python -m environment generate-questions` is the single supported Stage 1
-generator. It constructs synthetic tasks from bounded YAGO structural motifs:
-**Goal → typed evidence and task dependencies → Macro DAG → fictional World →
-Gold Program and WorkProducts → grounded Question**.
-
-Input YAGO provides predicate vocabulary and relation witnesses; simulated
-image/audio/video observations are text representations derived from synthetic
-structured values. The generator does **not** read original OmniGAIA media or
-claim to decode real media. The LLM may rewrite Question/Scenario prose only;
-Goal, World, permissions, dependency graph, Gold and answer are frozen.
-
-## Canonical layout
-
-| Path | Responsibility |
-| --- | --- |
-| `pipeline.py` | Generation command, quality aggregation and reporting |
-| `stages.py` | Bounded candidate construction, resumable LLM review and ordered journals |
-| `planning/` | Output-first Goal, evidence/source plan, typed Macro DAG, YAGO index and current spec |
-| `grounding/` | Synthetic clue/source representations and contextual media descriptions |
-| `execution/` | World materialization, typed Program IR, scoped Macro execution and acquisition permissions |
-| `authoring/` | Question/Scenario Author and Critic, prompts, semantics and surface guards, shared API backend |
-| `auditing/` | Strict Replay, source necessity, evidence-grounding checks and scheduling-structure metrics |
-
-The `generate_question/` root deliberately has only three Python files:
-`__init__.py`, `pipeline.py` and `stages.py`. Do not add forwarding modules
-for functions already owned by subpackages.
-
-**Retired:** `macro_first_v2`, `typed_knowledge_v1/v2/v3/v4`,
-`task_graph_first_v1/v2`, `hybrid_world*`, legacy approval constructors,
-and their import-compatibility facades. There is no `legacy_stage1/`
-generator. `spec_issues` rejects retired reasoning patterns. Old scene files
-requiring those retired compilers are no longer supported for Replay; the
-intentionally supported input is the current frozen `task_plan` format.
-
-Some source-facing data structures (typed Program IR, Gold executor, source
-acquisition traces) continue to serve Stage 2–4 and are retained in
-`execution/` with their consumer imports updated. Removing a *generator*
-does not remove the current downstream WorkProduct protocol.
-
-## Default generation
+The **only maintained** Stage-1 entrypoint is:
 
 ```bash
-export DASHSCOPE_API_KEY="your-key"
-python -m environment generate-questions \
-  --config environment/configs/questions.yaml \
-  --output-dir environment/data/stage1
+python -m environment generate-questions --config environment/configs/questions.yaml
+python -m environment quality --config environment/configs/questions.yaml
 ```
 
-The canonical config selects `qwen3.8-flash` for Question Author/Critic
-through `config/model_config.yaml`; Question workers default to **10**.
-Scenario Author/Critic is optional and off by default.
+The default configuration creates **500 frozen candidate ProblemSpecs**
+using up to 2,000 candidate seeds, then independently reviews their natural
+questions. Author/Critic rejection can reduce the count of published Scenes;
+do not equate `generation.target` with LLM-reviewed output size.
 
-`max_revisions: 2` means at most three candidate drafts per Question.
-Accept/reject decisions do not rewrite the frozen World or Gold. Use a new
-output directory between incompatible model/code settings; a completed
-run cannot be silently resumed under changed signatures.
+## Construction
 
-Expected files include:
-- `constructed/scenes.jsonl`: deterministic frozen Scenes with reference Questions
-- `questions/scenes.jsonl`: accepted LLM-reviewed Questions referencing identical World/Gold
-- `quality_report.json`, `summary.json`: acceptance and structural/evidence audits
+`Goal → typed evidence requirements → Macro DAG → synthetic World →
+executable Program/WorkProducts → independently reviewed Question`
 
-Stage 2–4 consume only accepted current-Task-Plan Scenes.
+YAGO supplies structural motifs and relation vocabulary; the synthesized
+World, Gold and source permissions are code-owned. Image/audio/video evidence
+is a **textual synthetic observation**, not decoded external media. Question
+Author/Critic can edit question language but cannot mutate evidence, Gold or
+task dependencies.
 
-## Validation
+| Module | Role |
+| --- | --- |
+| `planning/` | Goal and scoped evidence plans; typed Macro DAG |
+| `grounding/` | source vocabulary, YAGO motifs, synthetic observations |
+| `execution/` | exact World, Program IR, evidence source access and Replay |
+| `authoring/` | optional Scenario Author and reviewed Question language |
+| `auditing/` | strict Replay and evidence/graph-quality diagnostics |
+| `stages.py` | ordered candidate construction and crash-safe review journals |
+| `pipeline.py` | one supported generation pipeline and quality reporting |
+
+## Outputs and acceptance
+
+`stage1/constructed/scenes.jsonl` is the deterministic frozen corpus.
+`stage1/questions/scenes.jsonl` contains **only accepted LLM-reviewed**
+questions. Downstream Stages 2–4 must consume the latter. Check
+`stage1/summary.json` and `stage1/quality_report.json` for acceptance,
+rejection reasons, replay correctness and structural diversity.
+
+The defaults use the local `local-qwen3.5-9b` OpenAI-compatible server at
+`http://127.0.0.1:8807/v1`; Scenario Author/Critic is disabled. Ensure
+`data/world-source/YAGO-4.6` is available. No DashScope key is required
+for this local default.
+
+An offline test can be run without the 500-scene LLM batch:
 
 ```bash
 python -m unittest discover -s environment/tests -p 'test_*.py'
-python -m environment.tests.stage1_pilot \
-  --target 100 --output-dir environment/data/stage1_offline_100
+python -m environment.tests.stage1_pilot --target 100 \
+  --output-dir environment/data/stage1_offline_100
 ```
 
-The offline pilot uses a small generated RDF fixture, tests strict Replay
-and Goal/World/source dependency consistency, and makes **no** live LLM calls.
-Live Flash quality, acceptance rate, API costs and latency require a
-separate full run with real YAGO and configured credentials.
-
-For subsequent stage integration, the current-only fixture and pipeline
-tests exercise Stage 1 → Stage 2 WorkProducts → Stage 3 trusted trajectory →
-Stage 4 untrusted recovery. A passing offline test alone is not evidence of
-agent robustness in the full benchmark.
-
-The `quality_report.json` scheduling metrics describe legal partial-order
-freedom only; they are not claims that Main-Agent learned adaptive policies.
+Keep original Scene identifiers and provenance intact across later Stages.
+No older generator variants or compatibility facades are maintained.

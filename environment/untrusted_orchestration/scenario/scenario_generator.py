@@ -25,7 +25,7 @@ def make_scenario(scene: dict, plan: dict) -> dict:
         "scenario_id": plan["sample_id"],
         "question_id": plan["task_id"],
         "origin_feedback_round": plan["branch_round"],
-        "mode": "event_driven",
+        "mode": "single_turn",
         "blueprint": "immediate_feedback_fault",
         "fault_atoms": atoms,
         "evidence_events": [],

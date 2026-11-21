@@ -1,16 +1,14 @@
-# Canonical Stage 1: output-first Goal -> typed evidence -> composed World
-# -> scoped evidence views -> original Compiler/Replay and Stage 2–4 contracts.
-# YAGO supplies observed relation vocabulary and world-structure statistics,
-# NOT mandatory factual paths. Recombined entities/relations are new facts
-# within the generated scenario; their synthetic origin remains private.
+# Stage 1: generate 500 candidate ProblemSpecs, then independently review the questions.
+# The reviewed Scene count can be lower than generation.target; downstream stages
+# only consume accepted, published Scenes. All paths are repository-root-relative.
 version: 1
 
 input:
-  max_records: 1000
+  max_records: 2000  # room for rejected/duplicate candidate ProblemSpecs
 
 generation:
-  output_dir: environment/data/stage1
-  target: 100
+  output_dir: environment/data/batches/candidate_500/stage1
+  target: 500
   seed: 17
   difficulty_mix: [0, 50, 50]
   overwrite: false
@@ -34,9 +32,6 @@ scenario:
   timeout: 180
 
 question:
-  # Use the already-running local vLLM OpenAI-compatible endpoint.
-  # Bypass the remote-only registry resolver; no API key is required.
-  # Frozen Task Plan, World, Evidence and Gold remain code-owned.
   registry: null
   api_base: http://127.0.0.1:8807/v1
   model: local-qwen3.5-9b

@@ -1,79 +1,77 @@
-# MAESTRO Stage 4: Main-observable unreliability
+# Stage 4 — Main-observable unreliable feedback (single-turn)
 
-**Goal:** From a frozen Stage-1/2/3 scene and the latest returned Sub-Agent
-feedback, produce exactly ONE Main-Agent next-decision example.
+```bash
+python -m environment generate-untrusted-turns \
+  --config environment/configs/untrusted_orchestration.yaml
+```
 
-## Scenario-first, not fault-first
+From a **reviewed Stage-3 Clean Reference**, perturb one already returned
+Sub-Agent feedback batch and produce **one** independently reviewed Main
+next-decision label. Historical Stage-3 Main dispatches and earlier reports
+stay unchanged. No hidden Oracle truth enters the Main prompt; no future
+Sub-Agent task is executed to certify recovery.
 
-| Target | Main-observable issue | Construction prerequisite |
+## Observable scenario targets
+
+| Target | Main-visible condition | Necessary evidence |
 | --- | --- | --- |
-| A: Evidence Insufficiency | Missing, partial, false completion | Required evidence was not delivered |
-| B1: Internal Inconsistency | Two incompatible claims in a single report | Explicit, same-object internal claims |
-| B2: Constraint Inconsistency | Violation of public task or execution requirement | Public keys, arithmetic operands, scope or relation witnesses |
-| B3: Inter-Report Inconsistency | Latest report conflicts with another delivered report | Same subject, attribute, scope and actual public reports |
+| A | Evidence insufficiency | missing / partial / falsely finished delivery |
+| B1 | Internal inconsistency | two contradictory claims within one delivered report |
+| B2 | Constraint inconsistency | public key, source scope, relation or arithmetic contradiction |
+| B3 | Inter-report inconsistency | same subject, field and scope across **actually delivered** reports |
 
-The private generator first identifies feasible scenario targets, then probes
-the existing executable fault operators. Stage 4A subsequently validates the
-**realized** observable scenario independently. A candidate with no public
-witness, or a realized class different from its target, is not released as a
-positive Main supervision label.
+B3 additionally records source relationship: a genuine
+`independent_source_claim_conflict` requires explicit independent direct
+provenance. Repeated queries to one source are not independent corroboration.
+A candidate fault/operator is **never** accepted as proof of a visible
+conflict. Stage 4A independently reconstructs the public witness.
 
-Historical Stage 3 dispatches and reports remain byte-for-byte unchanged.
-There is no inserted recheck, invented independent source, fabricated evidence
-citation, hidden Gold in the Main prompt, or post-decision recovery rollout.
+## Runtime modules
 
-## Code ownership
+- `trusted_prefix.py`: validates the supplied Stage-3 Episode against
+  independently compiled Stage-1/2 trusted evidence
+- `scenario/`: A/B1/B2/B3 feasibility, one-fault candidates,
+  round sampling and scenario-first selection
+- `runtime/`: actual atomic faults, evidence requests and replay
+- `inspection/`, `state_machine.py`: Main-visible claim/source/dependency
+  state and independent contradictions
+- `reporting/`, `offline_pipeline.py`: Sub-Agent feedback naturalization,
+  Main Author/Critic and guarded next action
+- `publication.py`: separate positive turns, failed trials and private
+  audit/supervision labels
+- `generate_turns.py`: bounded candidate orchestration and resumable
+  Stage 4A/4B/4C journals
 
-- scenario/observable_scenarios.py: canonical two-family taxonomy and
-  scenario feasibility checks
-- scenario/candidate_exploration.py: single-turn scenario-first fault
-  enumeration only; no multi-round recovery branch
-- runtime/faults.py, runtime/atomic_faults.py: existing atomic mutation and
-  actual executable operator replay
-- inspection/history_reports.py: read-only comparisons of delivered reports
-- inspection/ and state_machine.py: Main-visible evidence state
-- runtime/evidence_planning.py: legal Main next-action plan
-- reporting/ and offline_pipeline.py: LLM feedback/decision author and critic
-- scenario/single_turn_selection.py: independent realization check and
-  scenario-first balanced selection
-- publication.py: private audits, published Main decisions and scenario counts
+The only execution unit is `single_turn`, not multi-round recovery. The
+internal `scenario_mode` label also uses `single_turn`. A positive sample
+means a legal reviewed Main decision based on the **currently visible**
+feedback; it does not establish eventual answer correctness or global task
+recovery.
 
-Source independence, modality, same-round vs cross-round and downstream
-dependency status are **attributes** of evidence relations, not extra
-fault kinds. B3 is left empty if no comparable public claims exist.
+## Publication and diagnostics
 
-## Archived baseline and migration
+The 500-batch defaults bound candidate exploration to 24 variants per
+feedback round and 8 distractors per fault, selecting up to 2 per round
+against a global **2,000 positive Main-turn budget**. These are upper
+bounds, not a guaranteed number of positive samples or exhaustive coverage.
 
-Completed v3: 3,963 candidate trials, 1,634 actionable candidates,
-1,000 published turns, no published inter-report conflicts, and all
-1,000 published trusted prefixes preserved. The new scenario-first
-candidate order intentionally changes candidate identity and sampling;
-do not claim paired numerical equivalence without keyed replay analysis.
+- `main_turns.jsonl`, `episodes.jsonl`: **accepted** public one-turn labels
+- `private/candidate_selection.jsonl`: 4A eligibility and separate 4B/4C
+  primary/backfill outcomes
+- `private/scene_evidence_affordances.jsonl`: structural opportunity, not
+  proof of public B3 conflict
+- `private/claim_state_supervision.jsonl`: private decision-time evidence
+  states for accepted turns only
+- `summary.json`: input prefixes, A/B1/B2/B3 realized and published
+  distribution, language-review status and per-candidate failure reasons
 
-Use a new output directory because code signatures differ. Confirm
-published A/B1/B2/B3 counts, review acceptance, single-turn output
-contract, no leakage of private labels and frozen Stage 3 history.
+Select actual published candidates with
+`language_review_outcome == "single_turn_accepted"`, **not** merely
+`selected_for_language_review == true`, because failed candidates and
+backfill attempts are also present. Template mode only tests the executor
+and selection logic; it is not LLM-reviewed supervision. Fallback reports
+never become positive training labels.
 
-The maintained Stage-4 runner is now exclusively `single_turn`; there
-is no `decision_unit` switch. `recovery_episode`, future-event scheduling,
-historical report augmentation,
-recovery-based selection, and the unused configuration flags were removed.
-Existing older outputs remain archived; they cannot resume through this
-new code signature. Start a fresh output directory.
-
-## Selection diagnostics (single-turn)
-
-`private/candidate_selection.jsonl` has two separate decisions:
-
-- `selection_reason`: immutable Stage-4A visibility, legality, novelty and
-  scenario-budget classification (`target_scenario_not_publicly_realized`,
-  `duplicate_public_issue_and_action`, `single_turn_budget_reserve`,
-  `balanced_public_scenario_and_action`).
-- `language_review_selection_reason`: whether the candidate entered 4B/4C
-  as a primary or backfill attempt. An unselected candidate is **not** a
-  failed recovery: no future recovery episode is executed.
-
-`summary.json.candidate_screening_outcomes` classifies trials as
-`selected`, `no_public_witness`, `duplicate`, `budget_reserve`, or (when
-present) `target_mismatch`, `no_legal_action`, and `other_unselected`.
-Use this instead of the old `not_execution_recovered` label.
+For evaluation, use disjoint Scene (or stronger shared-template) splits and
+measure decisions from an independently running Main Agent, not just the
+offline Author/Critic acceptance rate.
