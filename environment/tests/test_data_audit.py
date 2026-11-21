@@ -23,7 +23,7 @@ def example():
         "scene_id": "a",
         "kind": "fault_injected",
         "fault": {"atoms": [{"kind": "wrong_retrieval"}]},
-        "recovery": {"globally_recovered": True},
+        "recovery": {"decision_accepted": True, "globally_recovered": None},
     })
     decisions = []
     for scene in scenes:
@@ -49,7 +49,7 @@ def example():
         "case_id": "fault:a:1",
         "source": "untrusted",
         "decision_round": 2,
-        "prompt": [{"role": "user", "content": "Recovery prompt a"}],
+        "prompt": [{"role": "user", "content": "Next-decision prompt a"}],
     })
     labels = [{
         "schema": "maestro.decision_teacher.v1",
@@ -100,9 +100,9 @@ class BaseAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "teacher_decision_alignment"):
             audit_dataset(*args)
 
-    def test_unrecovered_branch_cannot_provide_positive_decision(self):
+    def test_unaccepted_branch_cannot_provide_positive_decision(self):
         args = example()
-        args[0][-1]["recovery"]["globally_recovered"] = False
+        args[0][-1]["recovery"]["decision_accepted"] = False
         with self.assertRaisesRegex(ValueError, "not_published_positive"):
             audit_dataset(*args)
 
