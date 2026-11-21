@@ -1,5 +1,6 @@
-# Official Stage-4 LLM language pilot: 10 frozen tasks, up to 1,000
-# published Main training turns. Stage-4A remains exhaustive; only the
+# Stage-4 LLM language pilot: source-grounded latest-feedback faults,
+# with original Stage-3 earlier dispatches and reports kept immutable.
+# 10 frozen tasks, up to 1,000 published Main training turns. Stage-4A remains exhaustive; only the
 # selected 4B Sub-Agent reports and 4C Main decisions call Author/Critic.
 # Do not reuse template-mode directories; manifest signatures differ.
 # One decision per visible, faulty latest feedback; no future recovery replay.

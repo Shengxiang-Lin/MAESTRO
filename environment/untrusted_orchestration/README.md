@@ -6,6 +6,37 @@ and source contracts; Stage 2 supplies reviewed reports; Stage 3 supplies
 the clean reference. Stage 4 runs separate private counterfactual and
 recovery executions and publishes only validated recovery decisions.
 
+## Provenance-preserving round-local supervision (Stage 4)
+
+In the maintained `single_turn` mode, the full Stage-3 *earlier* Main
+dispatches and delivered reports are immutable. The only changed evidence is
+the latest actually returned Sub-Agent batch. Enumeration DOES NOT add a new
+same-source recheck to that batch or edit a previous report to invent a
+witness. Legacy `recovery_episode` remains separately available for
+controlled hypothetical recheck experiments. These old recheck scenarios
+must not be counted as independent-source evidence.
+
+The candidate selector uses actual current public issues and one legal Main
+action. It balances **evidence relationship classes** first, then feedback
+rounds, fault types, claim focus, and action coordination patterns. Relation
+classes explicitly distinguish Result/Summary mismatches, missing/partial
+reports, keyed handoff conflicts, same-source repeated-query disagreements,
+and truly independent cited-source claim disagreements. No implicit duplicate
+source or schema-level overlap is counted as independent verification.
+
+The summary includes `available_evidence_relations`,
+`selected_evidence_relations`, `selected_coordination_patterns`,
+`published_single_turn_evidence_relations_4a`,
+`published_single_turn_coordination_patterns`,
+`published_single_turn_parallelism`, and
+`published_single_turn_stage3_prior_history`. Published relation labels
+refer to the Stage-4A public evidence audit for accepted samples, not the
+hidden fault origin or a claim that later verification completed. A run with
+zero independent comparable Stage-3 source pairs must report **zero** true
+independent cross-source claim conflicts: Stage 4 cannot manufacture what
+Stage 1–3 never established. Use a **new output directory** because code and
+manifest signatures have changed.
+
 ## Round-local Main-turn supervision (default config)
 
 The maintained YAML configs set `generation.decision_unit: single_turn`.
