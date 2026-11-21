@@ -114,18 +114,13 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "scenario/scenario_generator.py", "scenario/round_sampling.py",
         "scenario/candidate_exploration.py",
         "scenario/observable_scenarios.py",
-        "scenario/candidate_selection.py",
         "scenario/single_turn_selection.py",
         "inspection/evidence_affordances.py", "orchestration/reasoning_fidelity.py",
-        "inspection/visible_history.py", "inspection/visible_claim_state.py",
+        "inspection/history_reports.py", "inspection/visible_history.py", "inspection/visible_claim_state.py",
         "inspection/visible_claim_extraction.py",
         "inspection/claim_comparison.py",
         "orchestration/main_decision_contract.py",
         "reporting/contract.py", "reporting/surface.py",
-        "scenario/history_conflicts.py",
-        "scenario/prior_observation.py",
-        "scenario/handoff_conflicts.py",
-        "scenario/same_source_recheck.py",
         "orchestration/action_binding.py",
         "runtime/evidence_planning.py",
         "rewards/decision_reward_state.py",
@@ -228,23 +223,14 @@ def generate_turns(
     max_scenes: int | None = 30, branches_per_scene: int | None = None,
     decision_unit: str = "single_turn",
     round_sampling_strategy: str = "chronological",
-    max_post_fork_rounds: int | None = None,
-    seed: int = 17, fault_modes: list[str] | None = None,
-    persistence: str = "once", multi_target_probability: float = 0.0,
+    seed: int = 17,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
     max_parallel_tasks: int = 4, workers: int = 4,
-    scenario_mode: str = "event_driven",
     atomic_fault_kinds: list[str] | None = None,
-    max_fault_atoms: int = 1,
-    delayed_evidence_probability: float = 0.0,
-    candidate_strategy: str = "enumerate",
     max_candidates_per_round: int | None = None,
     max_distractors_per_fault: int | None = None,
     max_selected_per_round: int | None = None,
     target_main_turns: int | None = None,
-    selection_strategy: str = "causal_rank",
-    max_diagnostics_per_scene: int = 0,
-    max_language_attempts_per_round: int | None = None,
     max_revisions: int = 2,
     report_max_revisions: int | None = None,
     main_max_revisions: int | None = None,
@@ -275,10 +261,6 @@ def generate_turns(
         "chronological", "stratified", "evidence_aware",
     }:
         raise ValueError("invalid_feedback_round_sampling_strategy")
-    if max_post_fork_rounds is not None and (
-        type(max_post_fork_rounds) is not int or max_post_fork_rounds < 1
-    ):
-        raise ValueError("invalid_max_post_fork_rounds")
     if bool(author) != bool(critic) or bool(report_author) != bool(report_critic):
         raise ValueError("untrusted_author_and_critic_must_be_paired")
     if main_mode is None:
@@ -302,42 +284,19 @@ def generate_turns(
 
     if decision_unit != "single_turn":
         raise ValueError("untrusted_invalid_decision_unit")
-    if decision_unit == "single_turn" and candidate_strategy != "enumerate":
-        raise ValueError("single_turn_requires_enumerate_candidates")
-    if candidate_strategy != "enumerate":
-        raise ValueError("single_turn_requires_enumerate_candidates")
-    if candidate_strategy == "enumerate" and scenario_mode != "event_driven":
-        raise ValueError("enumeration_requires_event_driven_scenario")
     for name, value, maximum in (
         ("max_candidates_per_round", max_candidates_per_round, 128),
         ("max_distractors_per_fault", max_distractors_per_fault, 10),
         ("max_selected_per_round", max_selected_per_round, 8),
-        ("max_language_attempts_per_round", max_language_attempts_per_round, 8),
     ):
         if value is not None and (
             type(value) is not int or not 1 <= value <= maximum
         ):
             raise ValueError("invalid_" + name)
-    if selection_strategy not in {
-        "causal_rank", "stratified", "global_balanced", "scenario_first",
-    }:
-        raise ValueError("invalid_candidate_selection_strategy")
-    if type(max_diagnostics_per_scene) is not int or not (
-        0 <= max_diagnostics_per_scene <= 8
-    ):
-        raise ValueError("invalid_max_diagnostics_per_scene")
-    if (candidate_strategy == "enumerate"
-            and max_language_attempts_per_round is not None
-            and max_selected_per_round is not None
-            and max_language_attempts_per_round < max_selected_per_round):
-        raise ValueError("language_budget_smaller_than_selection")
     if target_main_turns is not None and (
         type(target_main_turns) is not int or target_main_turns < 1
     ):
         raise ValueError("invalid_global_main_turn_budget")
-    modes = list(fault_modes or ["missing", "partial", "wrong"])
-    if scenario_mode != "event_driven":
-        raise ValueError("single_turn_requires_event_driven_scenario")
     kinds = list(atomic_fault_kinds or [
         "no_result", "incomplete_retrieval", "done_but_incomplete",
         "wrong_retrieval", "wrong_entity_binding", "computation_error",
@@ -347,33 +306,19 @@ def generate_turns(
     if (not kinds or any(kind not in ATOM_TO_MODE for kind in kinds)
             or len(kinds) != len(set(kinds))):
         raise ValueError("invalid_atomic_fault_kinds")
-    if type(max_fault_atoms) is not int or not 1 <= max_fault_atoms <= 2:
-        raise ValueError("invalid_max_atomic_faults")
-    if type(delayed_evidence_probability) not in (int, float) or (
-        not 0 <= delayed_evidence_probability <= 1
-    ):
-        raise ValueError("invalid_delayed_evidence_probability")
     settings = {
         "decision_unit": decision_unit,
         "max_scenes": max_scenes,
         "branches_per_scene": branches_per_scene,
         "round_sampling_strategy": round_sampling_strategy,
-        "max_post_fork_rounds": max_post_fork_rounds,
         "seed": seed,
-        "fault_modes": modes, "persistence": persistence,
-        "scenario_mode": scenario_mode,
+        "scenario_mode": "event_driven",
         "atomic_fault_kinds": kinds,
-        "max_fault_atoms": max_fault_atoms,
-        "delayed_evidence_probability": delayed_evidence_probability,
-        "candidate_strategy": candidate_strategy,
+        "candidate_strategy": "enumerate",
         "max_candidates_per_round": max_candidates_per_round,
         "max_distractors_per_fault": max_distractors_per_fault,
         "max_selected_per_round": max_selected_per_round,
         "target_main_turns": target_main_turns,
-        "selection_strategy": selection_strategy,
-        "max_diagnostics_per_scene": max_diagnostics_per_scene,
-        "max_language_attempts_per_round": max_language_attempts_per_round,
-        "multi_target_probability": multi_target_probability,
         "max_rounds": max_rounds, "max_cost": max_cost,
         "max_retries": max_retries, "max_parallel_tasks": max_parallel_tasks,
         "max_revisions": max_revisions,
@@ -978,9 +923,7 @@ def generate_turns(
             stage="main", subset=batch_plans,
         )
         attempted.update(active)
-        if candidate_strategy != "enumerate":
-            break
-        next_active = set()
+            next_active = set()
         successful = sum(
             published_recovery(i) for i in attempted
         )
@@ -1054,8 +997,7 @@ def generate_turns(
         write(stage_b, plan, placeholder)
         write(journal, plan, placeholder)
 
-    if True:
-        for row in selection_rows:
+    for row in selection_rows:
             index = row["candidate_index"]
             row["selected_for_language_review"] = index in attempted
             # Stage-4A screening is independent from subsequent language
@@ -1176,17 +1118,13 @@ def generate_turns(
         "publication_status": "filtered_by_visibility_or_language_review",
         "decision_unit": decision_unit,
         "pipeline": "maestro_untrusted_orchestration",
-        "scenario_mode": scenario_mode,
-        "candidate_strategy": candidate_strategy,
+        "scenario_mode": "event_driven",
+        "candidate_strategy": "enumerate",
         "selection_strategy": "scenario_first",
-        "max_diagnostics_per_scene": max_diagnostics_per_scene,
         "round_sampling_strategy": round_sampling_strategy,
-        "max_post_fork_rounds": max_post_fork_rounds,
         "max_candidates_per_feedback_round": max_candidates_per_round,
         "max_distractors_per_fault": max_distractors_per_fault,
         "max_selected_per_feedback_round": max_selected_per_round,
-        "max_language_attempts_per_feedback_round":
-            max_language_attempts_per_round,
         "candidate_selection_diagnostics": str(
             output / "private" / "candidate_selection.jsonl"
         ),
@@ -1225,10 +1163,6 @@ def generate_turns(
             len(p["scenario_plan"]["evidence_events"])
             for p in planned
         ),
-        "delayed_requested_but_not_executable": sum(
-            p["scenario_plan"]["delayed_requested_but_unsupported"]
-            for p in planned
-        ),
         "mode": ("llm" if main_mode == "llm" or report_mode == "llm"
                  else "template"),
         "subagent_report_mode": report_mode,
@@ -1257,10 +1191,6 @@ def generate_turns(
         }),
         "rounds_without_executable_fault": sum(
             plan["skip_reason"] == "no_executable_fault_on_returned_batch"
-            for plan in planned
-        ),
-        "rounds_skipped_by_recovery_budget": sum(
-            plan["skip_reason"] == "insufficient_recovery_round_budget"
             for plan in planned
         ),
         "questions_with_extracted_rounds": len({
