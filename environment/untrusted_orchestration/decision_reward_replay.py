@@ -1,4 +1,4 @@
-"""Rebuild decision-time reward snapshots from accepted old Stage-4 journals.
+"""Rebuild decision-time reward snapshots from received one-turn reports.
 
 This does NOT invoke any LLM or rerun faulty Tool/Sub-Agent generations.
 It replays *logged* attempt versions and actually delivered public reports.
@@ -96,8 +96,6 @@ def replay_reward_states(scene, episode, audit, *,
         d["round"]: d for d in audit["decision_audit"]
         if d.get("decision_kind") in {"delegate", "complete"}
     }
-    from .scenario.handoff_conflicts import restore_handoff_contract
-    scene = restore_handoff_contract(scene, audit.get("history_conflict_anchor"))
     graph = scene["macro_graph"]
     state = ExecutionState(scene, reviewed_reports={})
     positions = {}
