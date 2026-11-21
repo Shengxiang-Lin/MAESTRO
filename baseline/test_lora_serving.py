@@ -98,6 +98,73 @@ class TestOnlineLoRA(unittest.TestCase):
                     str(base),
                 )
 
+    def test_adapter_training_base_inaccessible_on_another_host(self):
+        """An inaccessible old training root must not block portable LoRA use."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "Qwen3-8B"
+            base.mkdir()
+            adapter = root / "final_adapter"
+            adapter.mkdir()
+            (adapter / "adapter_model.safetensors").write_bytes(b"test-weights")
+            training_base = Path("/root/autodl-tmp/MAESTRO/base_models/Qwen3-8B")
+            (adapter / "adapter_config.json").write_text(
+                json.dumps({
+                    "r": 32,
+                    "base_model_name_or_path": str(training_base),
+                }),
+                encoding="utf-8",
+            )
+            config = {
+                "model_path": str(base),
+                "lora_adapter_path": str(adapter),
+                "max_lora_rank": 32,
+            }
+            original_exists = Path.exists
+
+            def simulated_exists(path):
+                if path == training_base:
+                    raise PermissionError("Permission denied: " + str(path))
+                return original_exists(path)
+
+            with patch("base.engine.vllm_service.Path.exists",
+                       autospec=True, side_effect=simulated_exists):
+                self.assertEqual(
+                    VLLMServiceManager._validate_lora_adapter(
+                        "maestro-lora", config, str(base)
+                    ),
+                    str(adapter),
+                )
+
+    def test_adapter_training_base_mismatch_still_rejected(self):
+        """Keep rejecting a different accessible training base directory."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "Qwen3-8B"
+            base.mkdir()
+            other_base = root / "different-Qwen3-8B"
+            other_base.mkdir()
+            adapter = root / "final_adapter"
+            adapter.mkdir()
+            (adapter / "adapter_model.safetensors").write_bytes(b"test-weights")
+            (adapter / "adapter_config.json").write_text(
+                json.dumps({
+                    "r": 32,
+                    "base_model_name_or_path": str(other_base),
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "adapter was trained for"):
+                VLLMServiceManager._validate_lora_adapter(
+                    "maestro-lora",
+                    {
+                        "model_path": str(base),
+                        "lora_adapter_path": str(adapter),
+                        "max_lora_rank": 32,
+                    },
+                    str(base),
+                )
+
     def test_stale_lora_model_card_is_not_reused(self):
         class FakeResponse:
             status = 200
