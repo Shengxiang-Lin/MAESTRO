@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import json
 import unittest
 
-from environment.tests.test_untrusted_orchestration import sample
+from environment.tests.stage4_fixtures import sample
 from environment.untrusted_orchestration.generate_turns import generate_turns, _plan_branches
 from environment.untrusted_orchestration.reporting.surface import render_records
 from environment.untrusted_orchestration.scenario.candidate_exploration import enumerate_round_candidates

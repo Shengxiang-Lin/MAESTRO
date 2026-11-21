@@ -20,7 +20,7 @@ from environment.untrusted_orchestration.state_machine import (
     ExecutionState, deterministic_report,
 )
 from environment.tests.test_stage4_history_first import _scene
-from environment.tests.test_untrusted_orchestration import sample
+from environment.tests.stage4_fixtures import sample
 
 
 def relation(values, refs=("source:F1",)):

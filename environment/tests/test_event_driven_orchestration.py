@@ -7,7 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from environment.tests.test_untrusted_orchestration import sample
+from environment.tests.stage4_fixtures import sample
 from environment.generate_question.execution.program_ir import Relation
 from environment.untrusted_orchestration.runtime.atomic_faults import (
     AtomicFault, probe_atoms,

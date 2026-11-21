@@ -16,7 +16,7 @@ from environment.untrusted_orchestration.offline_pipeline import (
 from environment.untrusted_orchestration.scenario.single_turn_selection import (
     select_single_turn_candidates, coordination_pattern, evidence_relation,
 )
-from environment.tests.test_untrusted_orchestration import sample
+from environment.tests.stage4_fixtures import sample
 
 
 class SingleTurnBranchTests(unittest.TestCase):

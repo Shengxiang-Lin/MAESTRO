@@ -15,7 +15,7 @@ from environment.data_export.export import export_dataset
 from environment.data_export.splits import (
     load_splits, make_splits, verify_splits,
 )
-from environment.tests.test_untrusted_orchestration import sample
+from environment.tests.stage4_fixtures import sample
 from environment.untrusted_orchestration.runtime.faults import Fault
 from environment.untrusted_orchestration.trajectory_builder import build_branch
 

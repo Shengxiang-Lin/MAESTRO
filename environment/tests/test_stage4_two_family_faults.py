@@ -7,7 +7,7 @@ import unittest
 from environment.untrusted_orchestration.reporting.surface import delivered_records
 
 from environment.generate_question.execution.program_ir import Relation
-from environment.tests.test_untrusted_orchestration import sample
+from environment.tests.stage4_fixtures import sample
 from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault
 from environment.untrusted_orchestration.runtime.faults import run_attempt, relation_rows
 from environment.untrusted_orchestration.reporting.author import naturalize_report
