@@ -583,6 +583,8 @@ def build_branch(
     same_source_recheck_plan = (
         (scenario_plan or {}).get("same_source_recheck_plan")
     )
+    if single_turn and same_source_recheck_plan is not None:
+        raise ValueError("single_turn_cannot_augment_clean_stage3_dispatch")
     if same_source_recheck_plan is not None:
         base_episode = patch_same_source_recheck_episode(
             base_episode, scene, same_source_recheck_plan,
@@ -627,12 +629,13 @@ def build_branch(
             "prior_round": same_source_recheck_plan["older_wave_index"] + 1,
             "construction": "later_main_delegated_same_source_recheck",
         }
-    handoff_plan = (scenario_plan or {}).get("history_first_plan")
+    handoff_plan = (None if single_turn else
+                    (scenario_plan or {}).get("history_first_plan"))
     if handoff_plan is not None:
         history_anchor = expose_prior_handoff(
             state, task_entries, trajectory, handoff_plan,
         )
-    if (history_anchor["status"] != "generated"
+    if (not single_turn and history_anchor["status"] != "generated"
             and scenario_plan is not None
             and scenario_plan.get("mode") == "event_driven"
             and len(faults) == 1
@@ -645,7 +648,8 @@ def build_branch(
             latest_task_ids={faults[0].task_id},
         )
     prior_observation_patch = None
-    if (history_anchor["status"] not in {"exposed", "generated"}
+    if (not single_turn
+            and history_anchor["status"] not in {"exposed", "generated"}
             and scenario_plan is not None
             and scenario_plan.get("mode") == "event_driven"
             and len(faults) == 1
@@ -726,6 +730,24 @@ def build_branch(
             history_anchor = prior_diag
 
     paired_clean_history = None
+    if single_turn:
+        # Original Stage-3 actions/reports strictly precede the corrupted
+        # latest batch. They must never be edited or extended to invent a
+        # witness for the current discrepancy.
+        trusted_actions = [a for a in base_episode["trajectory"]
+                           if a.get("action") == "delegate_task"]
+        for idx, candidate_action in enumerate(trajectory[:-1]):
+            trusted = trusted_actions[idx]
+            if candidate_action.get("params") != trusted.get("params"):
+                raise ValueError("single_turn_modified_prior_main_dispatch")
+            delivered = (candidate_action.get("result") or {}).get("subtask_results", [])
+            original = (trusted.get("result") or {}).get("subtask_results", [])
+            if len(delivered) != len(original) or any(
+                (observed.get("finish_result") or {}) !=
+                (clean.get("finish_result") or {})
+                for observed, clean in zip(delivered, original)
+            ):
+                raise ValueError("single_turn_modified_prior_feedback")
     if history_anchor["status"] in {"exposed", "generated"}:
         if fault_origin_wave_index < branch_round - 2:
             # Entire paired prefix, including the original downstream
@@ -1266,6 +1288,7 @@ def build_branch(
         ),
         "outcome": stopped,
         "decision_unit": "single_turn" if single_turn else "recovery_episode",
+        "stage3_prior_history_preserved": single_turn,
         "accepted_turns": len(turns) if success else 0,
         "private_only": True,
     }

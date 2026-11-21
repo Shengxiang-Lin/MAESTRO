@@ -535,6 +535,7 @@ def generate_turns(
             delayed_evidence_probability=delayed_evidence_probability,
             seed=seed, base=base,
             max_parallel_tasks=max_parallel_tasks,
+            preserve_stage3_history=(decision_unit == "single_turn"),
         )
     if decision_unit == "single_turn":
         # The experiment belongs to the *latest received* Sub-Agent batch.
