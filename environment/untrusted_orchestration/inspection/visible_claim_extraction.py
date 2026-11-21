@@ -23,7 +23,8 @@ _SCALAR = (str, int, float, bool)
 _SUMMARY_PAIR = re.compile(
     r"\b(?P<subject>(?:(?:Case|Entry)-\d{2,5}|Dossier-[A-Za-z0-9]+))\s*"
     r"(?::|,)\s*(?P<field>[A-Za-z][A-Za-z0-9_]*)\s*"
-    r"=\s*(?P<value>-?\d+(?:\.\d+)?|true|false)\b", re.I,
+    r"=\s*(?P<value>-?\d+(?:\.\d+)?|true|false)\b"
+    r"(?=$|[\s,.;!?])", re.I,
 )
 _CASE_LIST = re.compile(
     r"^The current task returned (?P<count>\d+) case identifiers?:\s*"
@@ -94,12 +95,32 @@ _CASE_HUMAN_LIST = re.compile(
 )
 
 
-def _literal_case_mentions(result: str) -> list[str]:
-    """Read only an explicitly returned case-ID list from visible prose.
+_COUNT_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+_LIST_COUNT = re.compile(
+    r"\b(?P<count>\d+|one|two|three|four|five|six|seven|eight|nine|ten)"
+    r"\s+(?:case identifiers?|cases?|dossiers?|identifiers?)\b", re.I,
+)
+# Match only explicit quoted strings, dates and identifier-valued assignments.
+# Without a subject AND an output-contract field, do not create a claim.
+_STRING_PAIR = re.compile(
+    r'\b(?P<subject>(?:Case-\d{2,5}|Entry-\d{2,5}|'
+    r'Dossier-[A-Za-z0-9]+|PRJ-[A-Za-z0-9]+))'
+    r'\s*(?::|,)\s*(?P<field>[A-Za-z][A-Za-z0-9_]*)'
+    r'\s*=\s*(?P<value>"(?:[^"\\]|\\.)*"|'
+    r'\d{4}-\d{2}-\d{2}|'
+    r'(?:Case|Entry|Dossier|PRJ|ENT|MK|RK)-[A-Za-z0-9-]+)'
+    r'(?=$|[\s,.;!?])', re.I,
+)
 
-    Never use private World/Oracle rows to infer values not literally
-    present in Main's received answer. Abstain if the wording is
-    ambiguous, negative or mixed with excluded candidates.
+
+def _literal_case_mentions(result: str) -> list[str]:
+    """Read a complete, affirmative identifier list from public Result.
+
+    Oxford lists are supported; negative or qualified mentions abstain.
+    No value is inferred from private World, assignment or Gold.
     """
     opening = result.strip().split(". ", 1)[0].rstrip(".")
     lead, colon, values = opening.partition(":")
@@ -109,11 +130,27 @@ def _literal_case_mentions(result: str) -> list[str]:
         lead, re.I,
     ):
         return []
-    if re.search(r"\b(?:no|not|excluded|rejected)\b", lead, re.I):
+    if re.search(r"\b(?:no|not|excluded|rejected|except)\b", lead, re.I):
         return []
-    if not _CASE_HUMAN_LIST.fullmatch(values.strip()):
+    # Normalize only list punctuation. Every token must still be a literal
+    # identifier; mentions embedded in explanations do not qualify.
+    normalized = re.sub(r",\s+and\s+", ", ", values.strip(), flags=re.I)
+    normalized = re.sub(r"\s+and\s+", ", ", normalized, flags=re.I)
+    normalized = re.sub(r";\s*", ", ", normalized)
+    ids = [part.strip() for part in normalized.split(",")]
+    if not ids or any(
+        not _DELIVERED_CASE_ID.fullmatch(part) for part in ids
+    ):
         return []
-    return list(dict.fromkeys(_DELIVERED_CASE_ID.findall(values)))
+    if len(ids) != len({value.casefold() for value in ids}):
+        return []
+    expected = _LIST_COUNT.search(lead)
+    if expected:
+        token = expected.group("count").casefold()
+        count = int(token) if token.isdigit() else _COUNT_WORDS[token]
+        if count != len(ids):
+            return []
+    return ids
 
 
 def _typed_scalar(value):
@@ -309,6 +346,25 @@ def extract_visible_claims(report: dict, *, output_fields: list[str],
                 add(match.group("subject"), match.group("field"),
                     _parse_scalar(match.group("value")), surface)
                 modes.add("explicit_" + surface + "_pair")
+
+    # Literal typed string fields from O1 prose, e.g.
+    # "Dossier-ABC: date_a = 2012-02-18" or 'PRJ-001: owner = "Alice"'.
+    # This never guesses which record a bare unscoped value belongs to.
+    for surface, prose in (("result", result), ("summary", summary)):
+        if not isinstance(prose, str):
+            continue
+        for match in _STRING_PAIR.finditer(prose):
+            field = match.group("field")
+            if field not in declared:
+                continue
+            value = match.group("value")
+            if value.startswith('"'):
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    continue
+            add(match.group("subject"), field, value, surface)
+            modes.add("explicit_" + surface + "_string_pair")
 
     if source_id in {"report_a", "report_b"}:
         for item in visible_year_claims(report, source_id):

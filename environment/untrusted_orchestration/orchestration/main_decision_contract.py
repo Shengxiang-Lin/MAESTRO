@@ -100,9 +100,9 @@ def build_main_decision_contract(history: list[dict], goals: list[dict],
         m = _FIELD.search(goal.get("main_visible_justification", ""))
         if m:
             fields.add(_normalize_field(m.group(1)))
-    conflicts, gaps = [], []
+    conflicts, public_conflicts, gaps = [], [], []
     from environment.untrusted_orchestration.inspection.claim_comparison import (
-        report_claim_conflicts,
+        public_report_conflicts,
     )
     for position, report in enumerate(recent):
         if not isinstance(report, dict):
@@ -114,16 +114,20 @@ def build_main_decision_contract(history: list[dict], goals: list[dict],
         status = finish.get("status", "done")
         if status in {"partial", "missing", "stale"}:
             gaps.append({"report_index": position, "status": status})
-        for finding in report_claim_conflicts(report, allowed_fields=fields):
-            conflicts.append({
+        for finding in public_report_conflicts(report, allowed_fields=fields):
+            entry = {
                 **finding,
                 "report_index": position,
                 "observed_round": latest,
-            })
+            }
+            public_conflicts.append(entry)
+            if finding["kind"] == "result_summary_disagreement":
+                conflicts.append(entry)
     return {
         "contract_version": "v10_4_3",
         "visible_evidence": {"latest_round": latest, "delivery_gaps": gaps,
-                             "confirmed_result_summary_conflicts": conflicts},
+                             "confirmed_result_summary_conflicts": conflicts,
+                             "confirmed_public_conflicts": public_conflicts},
         "prior_field_activity": public_field_activity(history, goals),
         "pending_requests": [{
             "operation": g.get("operation"),
@@ -139,7 +143,12 @@ def build_main_decision_contract(history: list[dict], goals: list[dict],
 
 def critic_denies_confirmed_conflict(review: dict, contract: dict) -> bool:
     if (not isinstance(review, dict) or review.get("verdict") != "fail"
-            or not contract["visible_evidence"]["confirmed_result_summary_conflicts"]):
+            or not (
+                contract["visible_evidence"].get("confirmed_public_conflicts")
+                or contract["visible_evidence"].get(
+                    "confirmed_result_summary_conflicts"
+                )
+            )):
         return False
     reason = (str(review.get("reason", "")) + " " +
               str(review.get("repair_hint", ""))).lower()

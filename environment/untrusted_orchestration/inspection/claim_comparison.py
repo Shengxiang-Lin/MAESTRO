@@ -172,3 +172,111 @@ def report_claim_conflicts(
                 "state": "unverified",
             })
     return conflicts
+
+
+# A repeated subject alone is NOT evidence of contradiction: independent
+# observations at different times may legitimately return different values.
+# A shared explicit FactRef (or an identical declared record key) establishes
+# a concrete same-record witness without consulting hidden World rows.
+_RECORD_KEYS = ("record_key_1", "record_key_2", "accession_id", "marker_code")
+_SCOPE_KEYS = {
+    "observed_at", "observation_date", "observation_year", "timestamp",
+    "valid_from", "valid_to", "valid_scope", "effective_date",
+    "period", "period_start", "period_end", "record_version", "version",
+    # One entity may have several independent observations citing a shared
+    # upstream source row. Distinct observation IDs are distinct scopes.
+    "observation_id",
+}
+
+
+def result_internal_claim_conflicts(
+    report: dict, *, allowed_fields: set[str] | None = None,
+) -> list[dict]:
+    """Compare two *delivered Result rows* from the same record.
+
+    Rows must explicitly name the same subject AND have common cited FactRefs
+    or an identical strong record key. Different dates/versions/scopes do not
+    imply an error in a measurement. Unknown provenance abstains.
+    """
+    rows = _rows(report)
+    if not rows or len(rows) < 2:
+        return []
+    allowed = (None if allowed_fields is None else {
+        field.strip().replace(" ", "_").casefold()
+        for field in allowed_fields
+    })
+    grouped = {}
+    for number, row in enumerate(rows, 1):
+        values = row["values"]
+        subject_field = next((
+            field for field in _SUBJECT_FIELDS
+            if isinstance(values.get(field), str) and values[field].strip()
+        ), None)
+        if subject_field is None:
+            continue
+        subject = values[subject_field].strip()
+        grouped.setdefault((subject_field, subject.casefold()), []).append(
+            (number, subject, row)
+        )
+    conflicts, seen = [], set()
+    for group in grouped.values():
+        for i, (left_number, subject, left) in enumerate(group):
+            for right_number, _, right in group[i + 1:]:
+                a, b = left["values"], right["values"]
+                refs_a = set(left.get("source_fact_refs") or [])
+                refs_b = set(right.get("source_fact_refs") or [])
+                shared_refs = refs_a & refs_b
+                same_key = any(
+                    key in a and key in b and a[key] is not None
+                    and _same(a[key], b[key]) for key in _RECORD_KEYS
+                )
+                if not shared_refs and not same_key:
+                    continue
+                # If an explicit time/version qualifier differs, the rows
+                # may be different real observations, not conflicting claims.
+                if any(
+                    k in a and k in b and not _same(a[k], b[k])
+                    for k in _SCOPE_KEYS
+                ):
+                    continue
+                for field in sorted(a.keys() & b.keys()):
+                    if field in _SUBJECT_FIELDS or field in _RECORD_KEYS:
+                        continue
+                    if allowed is not None and field.casefold() not in allowed:
+                        continue
+                    value_a, value_b = a[field], b[field]
+                    if (value_a is None or value_b is None or
+                            type(value_a) not in (str, int, float, bool) or
+                            type(value_b) not in (str, int, float, bool) or
+                            _same(value_a, value_b)):
+                        continue
+                    key = (subject.casefold(), field, repr(value_a), repr(value_b))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    conflicts.append({
+                        "kind": "intra_result_conflict",
+                        "field": field, "subject": subject,
+                        "result_value": _display(value_a),
+                        "summary_value": _display(value_b),
+                        "observed_values": [value_a, value_b],
+                        "result_row_numbers": [left_number, right_number],
+                        "source_fact_refs": sorted(shared_refs),
+                        "basis": "two explicitly returned same-record Result rows",
+                        "state": "unverified",
+                    })
+    return conflicts
+
+
+def public_report_conflicts(
+    report: dict, *, allowed_fields: set[str] | None = None,
+) -> list[dict]:
+    """One Main-visible comparison entrypoint for planning and 4C review."""
+    old = report_claim_conflicts(report, allowed_fields=allowed_fields)
+    inside = result_internal_claim_conflicts(
+        report, allowed_fields=allowed_fields,
+    )
+    return [
+        {**finding, "kind": "result_summary_disagreement"}
+        for finding in old
+    ] + inside
