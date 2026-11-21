@@ -1,9 +1,8 @@
-"""Event-driven untrusted O1 Main decision generation.
+"""Stage-4 Main-observable single-turn unreliable-feedback decisions.
 
-Every prior feedback round is a legal single-atom scenario. Opt-in event
-scenarios additionally schedule an executable later fault and/or defer a
-not-yet-returned independent evidence task. No historical Main action is
-retroactively rewritten; all events are replayed in causal order.
+Each candidate mutates exactly one already-returned Sub-Agent feedback batch.
+The previously published Stage-3 Main and Sub-Agent history stays immutable.
+This module never schedules future evidence or executes a recovery rollout.
 """
 from __future__ import annotations
 
@@ -308,7 +307,7 @@ def generate_turns(
         "branches_per_scene": branches_per_scene,
         "round_sampling_strategy": round_sampling_strategy,
         "seed": seed,
-        "scenario_mode": "event_driven",
+        "scenario_mode": "single_turn",
         "atomic_fault_kinds": kinds,
         "candidate_strategy": "enumerate",
         "max_candidates_per_round": max_candidates_per_round,
@@ -1090,7 +1089,7 @@ def generate_turns(
         "publication_status": "filtered_by_visibility_or_language_review",
         "decision_unit": "single_turn",
         "pipeline": "maestro_untrusted_orchestration",
-        "scenario_mode": "event_driven",
+        "scenario_mode": "single_turn",
         "candidate_strategy": "enumerate",
         "selection_strategy": "scenario_first",
         "round_sampling_strategy": round_sampling_strategy,
