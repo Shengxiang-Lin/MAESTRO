@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import json
 import unittest
 
 from environment.untrusted_orchestration.runtime.faults import Fault
+from environment.untrusted_orchestration.generate_turns import generate_turns
 from environment.untrusted_orchestration.trajectory_builder import build_branch
 from environment.untrusted_orchestration.offline_pipeline import (
     author_branch_reports, author_branch_main,
@@ -59,6 +63,48 @@ class SingleTurnBranchTests(unittest.TestCase):
         self.assertEqual(turns[0]["round"], 2)
         self.assertIsNone(final_audit["decision_reward_replay_error"])
         self.assertEqual(len(final_audit["decision_reward_states"]), 1)
+
+
+    def test_full_pipeline_publishes_each_reviewed_fork_as_exactly_one_turn(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            scenes = root / "scenes.jsonl"
+            reports = root / "subtasks.jsonl"
+            clean = root / "clean.jsonl"
+            scenes.write_text(json.dumps(self.scene) + "\n")
+            reports.write_text("".join(json.dumps(row) + "\n" for row in self.reports))
+            clean.write_text(json.dumps(self.clean) + "\n")
+            output = root / "roundwise"
+            summary = generate_turns(
+                scenes_path=scenes, reports_path=reports,
+                clean_episodes_path=clean, output_dir=output,
+                max_scenes=1, branches_per_scene=1,
+                decision_unit="single_turn",
+                scenario_mode="event_driven", candidate_strategy="enumerate",
+                atomic_fault_kinds=["no_result", "result_summary_conflict"],
+                max_candidates_per_round=2, max_distractors_per_fault=1,
+                target_main_turns=2, workers=1, no_progress=True,
+            )
+            self.assertEqual(summary["decision_unit"], "single_turn")
+            self.assertGreaterEqual(summary["single_turn_accepted"], 1)
+            self.assertEqual(summary["recovered"], 0)
+            self.assertEqual(summary["main_training_turns"],
+                             summary["single_turn_accepted"])
+            self.assertEqual(summary["published_episodes"],
+                             summary["single_turn_accepted"])
+            rows = [json.loads(line) for line in
+                    (output / "main_turns.jsonl").read_text().splitlines()]
+            episodes = [json.loads(line) for line in
+                        (output / "episodes.jsonl").read_text().splitlines()]
+            self.assertEqual(len(rows), len(episodes))
+            self.assertTrue(all(ep["format"] == "maestro_untrusted_single_turn.v1"
+                                and ep["trajectory"][-1]["result"]["pending"]
+                                and ep["trajectory"][-1]["result"]["subtask_results"] == []
+                                for ep in episodes))
+            self.assertTrue(all(len([
+                step for step in ep["trajectory"]
+                if step["attempt"] >= ep["branch_round"]
+            ]) == 1 for ep in episodes))
 
 
 def trial(i, kind="wrong_retrieval"):
