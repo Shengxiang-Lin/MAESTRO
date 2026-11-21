@@ -1223,7 +1223,7 @@ def build_branch(
         "branch_round": branch_round,
         "trajectory": trajectory,
         "outcome": stopped,
-        "recovered": success,
+        "recovered": stopped == "recovered",
         "main_decision_rounds": len(trajectory),
     }
     audit = {
