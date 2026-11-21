@@ -128,6 +128,17 @@ class PublicCorroborationTests(unittest.TestCase):
             )
         return state
 
+    def test_offline_stage1_to_stage4_b3_pilot(self):
+        from environment.tests.b3_corroboration_pilot import run_pilot
+        summary = run_pilot(
+            target_scenes=1, max_scene_scan=32, max_fault_variants=24,
+        )
+        self.assertEqual(summary["observable_b3"], 1, summary["results"])
+        self.assertEqual(
+            summary["results"][0]["stage3_prior_history_preserved"], True,
+        )
+        self.assertEqual(summary["results"][0]["next_main_turns"], 1)
+
     def test_clean_independent_claims_are_not_conflicts(self):
         state = self._state()
         for sid in ("link_a", "link_b"):
