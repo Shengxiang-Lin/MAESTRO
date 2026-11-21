@@ -11,6 +11,10 @@ from collections import Counter, defaultdict, deque
 from hashlib import sha256
 import json
 
+from .observable_scenarios import (
+    CONSTRUCTION_ORDER, classify_observable_scenario,
+)
+
 
 def _rank(row: dict, seed: int) -> str:
     key = f"{seed}:{row['question_id']}:{row['feedback_round']}:{row['candidate_index']}"
@@ -126,6 +130,13 @@ def select_single_turn_candidates(
         audit = (data or {}).get("private_audit") or {}
         issues, conflicts = current_public_witness(audit, plan["branch_round"])
         relation = evidence_relation(issues, conflicts)
+        realized = classify_observable_scenario(issues, conflicts)
+        target_scenario = plan.get("target_scenario")
+        scene_matched = (
+            bool(realized["scenario_id"])
+            and (not target_scenario or
+                 target_scenario == realized["scenario_id"])
+        )
         pattern, operations, dispatch_size = coordination_pattern(
             audit.get("evidence_plan", [])
         )
@@ -139,6 +150,7 @@ def select_single_turn_candidates(
             and len(planned_actions) == 1
             and planned_actions[0].get("action") == "delegate_task"
             and bool(issues or conflicts)
+            and scene_matched
             and audit.get("parallel_batches_verified") is True
             and len(audit.get("evidence_plan") or []) == 1
         )
@@ -167,6 +179,12 @@ def select_single_turn_candidates(
             "question_id": plan["task_id"],
             "feedback_round": plan["branch_round"],
             "atom_kind": kind,
+            "target_scenario": target_scenario,
+            "realized_scenario": realized["scenario_id"],
+            "scenario_family": realized["scenario_family"],
+            "comparison_type": realized["comparison_type"],
+            "matched_scenarios": realized["matched_scenarios"],
+            "observability": realized["observability"],
             "category": "+".join(family),
             "evidence_relation": relation,
             "coordination_pattern": pattern,
@@ -189,6 +207,9 @@ def select_single_turn_candidates(
             "selected_for_language_review": False,
             "selection_reason": (
                 "eligible_visible_current_feedback" if novel else
+                "target_scenario_not_publicly_realized" if (
+                    target_scenario and not scene_matched
+                ) else
                 "no_legal_current_decision_or_no_visible_issue" if not valid else
                 "duplicate_public_issue_and_action"
             ),
@@ -199,8 +220,9 @@ def select_single_turn_candidates(
             # A flood of surface-text variants from one fault must not
             # monopolize the language budget.
             pools[(
-                row["question_id"], row["feedback_round"], kind,
-                relation, pattern, operations, focus,
+                row["realized_scenario"], row["question_id"],
+                row["feedback_round"], kind, relation,
+                pattern, operations, focus,
             )].append(row)
 
     for pool in pools.values():
@@ -210,37 +232,32 @@ def select_single_turn_candidates(
 
     chosen: set[int] = set()
     per_round = Counter()
-    # Fairly cover distinct original feedback rounds and fault types before
-    # repeatedly sampling many variants of one surface.
+    # Round-robin observable scenario classes FIRST. Within each class,
+    # preserve the original source-relation, fault, action, and round
+    # diversity. Infeasible classes naturally produce zero candidates;
+    # no quota creates synthetic facts or silently rewrites Stage 3.
     queues = {key: list(value) for key, value in pools.items()}
-    relation_keys = defaultdict(list)
+    scenario_keys = defaultdict(list)
     for key in queues:
-        relation_keys[key[3]].append(key)
-    # First balance genuinely different *evidence relationships*, then
-    # round/fault/action combinations within each relationship. Once a rare
-    # relationship is exhausted, the remaining budget may be filled from
-    # other valid cases; this is not a fabricated quota.
-    relation_order = sorted(relation_keys, key=lambda label: (
-        label not in {
-            "independent_source_claim_conflict", "historical_same_claim_conflict",
-            "historical_keyed_handoff_conflict",
-        }, label
-    ))
+        scenario_keys[key[0]].append(key)
+    scenario_order = [
+        key for key in CONSTRUCTION_ORDER if key in scenario_keys
+    ]
     groups = {
-        relation: deque(sorted(keys, key=lambda key: sha256(
+        scenario: deque(sorted(keys, key=lambda key: sha256(
             f"{seed}:{key}".encode("utf-8")).hexdigest()))
-        for relation, keys in relation_keys.items()
+        for scenario, keys in scenario_keys.items()
     }
     remaining = (target_main_turns if target_main_turns is not None else
                  sum(len(queue) for queue in queues.values()))
     while remaining > 0:
         changed = False
-        for relation in relation_order:
-            keys = groups[relation]
+        for scenario in scenario_order:
+            keys = groups[scenario]
             while keys:
                 key = keys.popleft()
                 pool = queues[key]
-                feedback = key[:2]
+                feedback = key[1:3]
                 if (not pool or (max_selected_per_round is not None and
                                  per_round[feedback] >= max_selected_per_round)):
                     continue
@@ -249,7 +266,7 @@ def select_single_turn_candidates(
                     keys.append(key)
                 row["selection_purpose"] = "positive"
                 row["selected_for_language_review"] = True
-                row["selection_reason"] = "balanced_public_relation_and_action"
+                row["selection_reason"] = "balanced_public_scenario_and_action"
                 chosen.add(row["candidate_index"])
                 per_round[feedback] += 1
                 remaining -= 1
@@ -292,6 +309,16 @@ def select_single_turn_candidates(
         "available_recovered_by_fault_kind": {},
         "selected_by_fault_kind": dict(Counter(
             row["atom_kind"] for row in selected)),
+        "available_scenarios": dict(Counter(
+            row["realized_scenario"] for row in available)),
+        "selected_scenarios": dict(Counter(
+            row["realized_scenario"] for row in selected)),
+        "selected_scenario_families": dict(Counter(
+            row["scenario_family"] for row in selected)),
+        "scenario_target_not_realized": sum(
+            row["selection_reason"] == "target_scenario_not_publicly_realized"
+            for row in rows
+        ),
         "selected_observability_distribution": {
             "immediately_observable": len(chosen),
         },

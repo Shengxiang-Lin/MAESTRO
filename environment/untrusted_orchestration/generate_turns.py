@@ -116,6 +116,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "runtime/event_scheduler.py",
         "scenario/scenario_generator.py", "scenario/round_sampling.py",
         "scenario/candidate_exploration.py",
+        "scenario/observable_scenarios.py",
         "scenario/candidate_selection.py",
         "scenario/single_turn_selection.py",
         "inspection/evidence_affordances.py", "orchestration/reasoning_fidelity.py",
@@ -420,7 +421,9 @@ def generate_turns(
             type(value) is not int or not 1 <= value <= maximum
         ):
             raise ValueError("invalid_" + name)
-    if selection_strategy not in {"causal_rank", "stratified", "global_balanced"}:
+    if selection_strategy not in {
+        "causal_rank", "stratified", "global_balanced", "scenario_first",
+    }:
         raise ValueError("invalid_candidate_selection_strategy")
     if type(max_diagnostics_per_scene) is not int or not (
         0 <= max_diagnostics_per_scene <= 8
@@ -538,14 +541,16 @@ def generate_turns(
             preserve_stage3_history=(decision_unit == "single_turn"),
         )
     if decision_unit == "single_turn":
-        # The experiment belongs to the *latest received* Sub-Agent batch.
-        # An earlier poisoned report discovered much later is a different
-        # research setting and must not be silently mixed into this dataset.
-        planned = [
-            item for item in planned
-            if (item["scenario_plan"].get("blueprint") !=
-                "delayed_consumed_error_recovery")
-        ]
+        # Scenario-first enumeration has no historical recheck augmentation.
+        # Reject accidental reintroduction instead of silently filtering it.
+        if any(
+            item["scenario_plan"].get("same_source_recheck_plan")
+            or item["scenario_plan"].get("history_first_plan")
+            or item["scenario_plan"].get("blueprint")
+                == "delayed_consumed_error_recovery"
+            for item in planned
+        ):
+            raise ValueError("single_turn_must_preserve_frozen_stage3_history")
         for index, item in enumerate(planned):
             item["index"] = index
     if overwrite and output.exists():
@@ -1142,11 +1147,11 @@ def generate_turns(
             if remaining <= 0:
                 active = set()
                 continue
-            # Replace failed single-turn labels with other real, visible,
-            # source-legal candidates. Prefer the same feedback/fault class,
-            # but never require a future successful recovery trajectory.
+            # Backfill within the same observable scenario and policy first;
+            # fault mechanisms are implementation details, not scene classes.
             failed_keys = {
-                (row["question_id"], row["feedback_round"], row["atom_kind"])
+                (row["question_id"], row["feedback_round"],
+                 row["realized_scenario"], row["coordination_pattern"])
                 for row in selection_rows
                 if row["candidate_index"] in attempted
                 and row.get("selection_purpose") == "positive"
@@ -1156,7 +1161,10 @@ def generate_turns(
             for row in selection_rows:
                 if (row.get("recovery_rank") is not None
                         and row["candidate_index"] not in attempted):
-                    key = (row["question_id"], row["feedback_round"], row["atom_kind"])
+                    key = (
+                        row["question_id"], row["feedback_round"],
+                        row["realized_scenario"], row["coordination_pattern"],
+                    )
                     pools[key].append(row)
             for pool in pools.values():
                 pool.sort(key=lambda row: row["recovery_rank"])
@@ -1367,7 +1375,7 @@ def generate_turns(
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
         "selection_strategy": (
-            "round_relation_action_balanced" if decision_unit == "single_turn"
+            "scenario_first" if decision_unit == "single_turn"
             else selection_strategy
         ),
         "max_diagnostics_per_scene": max_diagnostics_per_scene,

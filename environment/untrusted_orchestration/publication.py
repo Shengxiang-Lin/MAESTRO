@@ -14,6 +14,7 @@ from .inspection.publication_guard import review_turn_surface
 from .scenario.single_turn_selection import (
     coordination_pattern, current_public_witness, evidence_relation,
 )
+from .scenario.observable_scenarios import classify_observable_scenario
 from .storage import _atomic_jsonl
 
 def _published_result_formats(episodes: list[dict]) -> dict:
@@ -87,6 +88,8 @@ def _publish(output: Path, planned: list[dict],
     main_confirmed_visible_conflicts = 0
     main_conflict_critic_rereviews = 0
     published_single_turn_relations = Counter()
+    published_scenario_families = Counter()
+    published_scenario_types = Counter()
     published_single_turn_patterns = Counter()
     published_single_turn_parallel = Counter()
     published_single_turn_conflict_kinds = Counter()
@@ -190,6 +193,16 @@ def _publish(output: Path, planned: list[dict],
                         "single_turn_accepted_without_current_public_witness"
                     )
                 relation = evidence_relation(issues, conflicts)
+                realized = classify_observable_scenario(issues, conflicts)
+                target = plan.get("target_scenario")
+                if not realized["scenario_id"] or (
+                    target is not None and target != realized["scenario_id"]
+                ):
+                    raise RuntimeError(
+                        "stage4_published_target_scenario_lacks_public_witness"
+                    )
+                published_scenario_families[realized["scenario_family"]] += 1
+                published_scenario_types[realized["scenario_id"]] += 1
                 pattern, operations, parallel_tasks = coordination_pattern(
                     private.get("evidence_plan") or []
                 )
@@ -587,6 +600,8 @@ def _publish(output: Path, planned: list[dict],
         "published_single_turn_evidence_relations_4a": dict(
             published_single_turn_relations
         ),
+        "published_scenario_families": dict(published_scenario_families),
+        "published_scenario_types": dict(published_scenario_types),
         "published_single_turn_coordination_patterns": dict(
             published_single_turn_patterns
         ),
