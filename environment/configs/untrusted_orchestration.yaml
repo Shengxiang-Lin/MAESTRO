@@ -22,7 +22,6 @@ generation:
   max_distractors_per_fault: null  # try all source-backed distractor variants
   max_selected_per_round: null  # retain all causally distinct recovered behaviors
   target_main_turns: 10000  # global positive Main-decision budget, not episode count
-  max_language_attempts_per_round: null  # review every distinct recovered candidate
   atomic_fault_kinds:
     - no_result
     - incomplete_retrieval
