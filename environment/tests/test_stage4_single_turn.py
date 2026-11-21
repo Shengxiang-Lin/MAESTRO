@@ -6,9 +6,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import json
 import unittest
+import yaml
 
 from environment.untrusted_orchestration.runtime.faults import Fault
 from environment.untrusted_orchestration.generate_turns import generate_turns
+from environment.untrusted_orchestration.config import generate_from_config
 from environment.untrusted_orchestration.trajectory_builder import build_branch
 from environment.untrusted_orchestration.offline_pipeline import (
     author_branch_reports, author_branch_main,
@@ -150,6 +152,58 @@ class SingleTurnBranchTests(unittest.TestCase):
                 original_waves[row["main_decision_round"] - 2]
                 for row in index_rows
             ))
+
+
+    def test_pilot_yaml_entrypoint_executes_one_turn_without_old_kwargs(self):
+        """Regression for the actual -m environment YAML adapter, not only
+        direct calls to generate_turns in the other pipeline test.
+        """
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            scenes = root / "scenes.jsonl"
+            reports = root / "subtasks.jsonl"
+            clean = root / "clean.jsonl"
+            scenes.write_text(json.dumps(self.scene) + "\n", encoding="utf-8")
+            reports.write_text(
+                "".join(json.dumps(row) + "\n" for row in self.reports),
+                encoding="utf-8",
+            )
+            clean.write_text(json.dumps(self.clean) + "\n", encoding="utf-8")
+
+            pilot = (Path(__file__).resolve().parents[1] / "configs"
+                     / "untrusted_orchestration_llm_pilot_10.yaml")
+            cfg = yaml.safe_load(pilot.read_text(encoding="utf-8"))
+            cfg["input"].update({
+                "scenes": str(scenes),
+                "reports": str(reports),
+                "clean_episodes": str(clean),
+            })
+            cfg["generation"].update({
+                "output_dir": str(root / "from-yaml"),
+                "max_scenes": 1,
+                "branches_per_scene": 1,
+                "workers": 1,
+                "mode": "template",
+                "atomic_fault_kinds": [
+                    "no_result", "result_summary_conflict",
+                ],
+                "max_candidates_per_round": 2,
+                "max_distractors_per_fault": 1,
+                "target_main_turns": 2,
+                "no_progress": True,
+            })
+            config_path = root / "pilot.yaml"
+            config_path.write_text(
+                yaml.safe_dump(cfg), encoding="utf-8",
+            )
+            summary = generate_from_config(config_path)
+            self.assertEqual(summary["decision_unit"], "single_turn")
+            self.assertGreaterEqual(summary["single_turn_accepted"], 1)
+            self.assertEqual(
+                len((root / "from-yaml" / "main_turns.jsonl")
+                    .read_text(encoding="utf-8").splitlines()),
+                summary["main_training_turns"],
+            )
 
 
 def trial(i, kind="wrong_retrieval"):

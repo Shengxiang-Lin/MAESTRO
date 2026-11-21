@@ -71,8 +71,6 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             "round_sampling_strategy", "chronological"
         ),
         "seed": run.get("seed", 17),
-        "scenario_mode": "event_driven",
-        "candidate_strategy": "enumerate",
         "max_candidates_per_round": run.get(
             "max_candidates_per_round", None
         ),

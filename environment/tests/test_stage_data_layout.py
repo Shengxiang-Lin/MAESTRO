@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from inspect import signature
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -17,6 +18,7 @@ from environment.base_orchestration.config import (
 )
 from environment.untrusted_orchestration.config import (
     DEFAULT_CONFIG as UNTRUSTED, load_config as load_untrusted,
+    generate_from_config as generate_untrusted_from_config,
 )
 
 
@@ -76,6 +78,39 @@ class CanonicalStagePathsTests(TestCase):
         self.assertNotIn("max_fault_atoms", stage4)
         self.assertNotIn("delayed_evidence_probability", stage4)
         self.assertEqual(stage4["mode"], "llm")
+
+    def test_stage4_yaml_adapter_matches_runner_signature(self):
+        """Both canonical YAMLs must call the actual maintained runner API.
+
+        Mock only the runner execution, not the config loader, so this
+        catches stale translated options before expensive 4A enumeration.
+        """
+        from environment.untrusted_orchestration.generate_turns import (
+            generate_turns,
+        )
+
+        def check_call(**kwargs):
+            signature(generate_turns).bind(**kwargs)
+            self.assertEqual(kwargs["main_mode"], "template")
+            self.assertEqual(kwargs["report_mode"], "template")
+            self.assertNotIn("scenario_mode", kwargs)
+            self.assertNotIn("candidate_strategy", kwargs)
+            return {"validated": True}
+
+        for config in (
+            UNTRUSTED,
+            UNTRUSTED.with_name("untrusted_orchestration_llm_pilot_10.yaml"),
+        ):
+            with self.subTest(config=config.name):
+                with patch(
+                    "environment.untrusted_orchestration.generate_turns.generate_turns",
+                    side_effect=check_call,
+                ) as runner:
+                    summary = generate_untrusted_from_config(
+                        config, mode="template", workers=1,
+                    )
+                self.assertEqual(summary, {"validated": True})
+                runner.assert_called_once()
 
     def test_stage3_public_cli_routes_to_config_without_old_runner(self):
         with patch(
