@@ -328,7 +328,13 @@ def build_branch(
     catalog = source_catalog(scene)
     graph = scene["macro_graph"]
     round_number = branch_round
+    # Detect cross-report disagreements BEFORE checking whether this batch
+    # has an observable issue. Otherwise a pure B3 disagreement without an
+    # accompanying B1/B2 witness exits as "no_current_visible_issue".
+    # Reuse this snapshot for the subsequent decision: do not detect twice.
+    scheduling = state.scheduling_state()
     visible_issues = state.observable_issues()
+    public_conflicts = state.active_public_conflicts()
     observable_issue_snapshots = [{
         "decision_round": round_number,
         "issues": visible_issues, "private_only": True,
@@ -338,7 +344,7 @@ def build_branch(
         for item in visible_issues
     ) or any(
         event.get("latest_round") == round_number - 1
-        for event in state.active_public_conflicts()
+        for event in public_conflicts
     )
 
     evidence_plan, decisions, turns, main_reviews, reward_states = [], [], [], [], []
@@ -346,7 +352,6 @@ def build_branch(
     if not recent_issue:
         stopped = "no_current_visible_issue"
     else:
-        scheduling = state.scheduling_state()
         repairs = [
             tid for tid in scheduling["repair"]
             if len(state.attempts[tid]) <= max_retries and state.ready(tid)
