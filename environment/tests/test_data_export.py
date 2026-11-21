@@ -82,11 +82,7 @@ class SingleTurnCaseSemanticsTests(unittest.TestCase):
         self.assertIsNone(case["recovery"]["globally_recovered"])
         self.assertEqual(case["untrusted"]["publication_status"],
                          "single_turn_accepted")
-        # A single-turn case is eligible for published Main decisions even
-        # when its future global recovery is intentionally unknown.
-        from environment.data_export.audit import audit_dataset
-        # Verify the private acceptance gate directly through a minimal
-        # syntactically valid decision/teacher pair in an existing clean Scene.
+        # Publication eligibility is independent of global recovery.
         self.assertTrue(case["recovery"]["decision_accepted"])
 
 
