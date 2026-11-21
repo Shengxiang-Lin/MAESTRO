@@ -73,7 +73,10 @@ class TrajectoryConfigurationTests(TestCase):
             yaml.safe_load(DEFAULT_CONFIG.read_text())["generation"]["workers"],
         )
         self.assertEqual(kwargs["max_revisions"], 2)
-        self.assertEqual(kwargs["max_attempts"], 10)
+        self.assertEqual(
+            kwargs["max_attempts"],
+            yaml.safe_load(DEFAULT_CONFIG.read_text())["generation"]["max_attempts"],
+        )
         self.assertEqual(kwargs["author_model"], "local-qwen3.5-9b")
         self.assertEqual(kwargs["critic_model"], "local-qwen3.5-9b")
         self.assertTrue(kwargs["scenes_path"].is_absolute())

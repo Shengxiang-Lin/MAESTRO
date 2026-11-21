@@ -192,9 +192,9 @@ class SingleTurnBranchTests(unittest.TestCase):
             )
             clean.write_text(json.dumps(self.clean) + "\n", encoding="utf-8")
 
-            pilot = (Path(__file__).resolve().parents[1] / "configs"
-                     / "untrusted_orchestration_llm_pilot_10.yaml")
-            cfg = yaml.safe_load(pilot.read_text(encoding="utf-8"))
+            canonical = (Path(__file__).resolve().parents[1] / "configs"
+                         / "untrusted_orchestration.yaml")
+            cfg = yaml.safe_load(canonical.read_text(encoding="utf-8"))
             cfg["input"].update({
                 "scenes": str(scenes),
                 "reports": str(reports),
