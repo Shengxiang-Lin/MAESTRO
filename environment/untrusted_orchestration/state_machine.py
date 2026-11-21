@@ -856,6 +856,22 @@ class ExecutionState:
                         or claim["subject"].startswith("source:")):
                     continue
                 refs = claim.get("fact_refs") or []
+                # The sibling directory tasks join a *project identifier*
+                # supplied upstream with one newly observed source mapping.
+                # That upstream citation identifies the lookup scope, not a
+                # competing witness for this route -> entity claim. Only
+                # the single direct local directory record can support it.
+                # Other joins and derived results retain the strict rule.
+                if (len(scopes) == 1
+                        and task.get("macro_role") == "association"
+                        and set(task.get("outputs", {}).get("typed_relation", []))
+                            == {"route_key", "entity_0"}
+                        and claim["attribute"] == "entity_0"
+                        and str(claim["subject"]).startswith("route:")):
+                    refs = [
+                        ref for ref in refs
+                        if ref.startswith(scopes[0] + ":")
+                    ]
                 origins = {self.origin_by_ref.get(ref) for ref in refs}
                 cited_sources = {
                     ref.split(":", 1)[0] for ref in refs if ":" in ref
@@ -866,7 +882,7 @@ class ExecutionState:
                         or len(cited_sources) != 1):
                     continue
                 rows.append({
-                    **claim, "task_id": tid,
+                    **claim, "fact_refs": list(refs), "task_id": tid,
                     "evidence_origin_id": next(iter(origins)),
                     "provenance_source_id": next(iter(cited_sources)),
                     "observed_round": self.public_report_rounds.get(tid, 0),
