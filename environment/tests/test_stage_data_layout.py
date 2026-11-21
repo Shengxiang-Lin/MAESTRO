@@ -30,16 +30,16 @@ class CanonicalStagePathsTests(TestCase):
         main = load_main(MAIN)
         stage4 = load_untrusted(UNTRUSTED)
         root = Path(__file__).resolve().parents[1] / "data"
-        pilot = root / "pilots" / "qwen_stage234_10"
+        pilot = root / "batches" / "candidate_500"
         self.assertEqual(QUESTIONS.name, "questions.yaml")
         self.assertEqual(REPORTS.name, "subagent_reports.yaml")
         self.assertEqual(MAIN.name, "main_orchestration.yaml")
         self.assertEqual(UNTRUSTED.name, "untrusted_orchestration.yaml")
-        self.assertEqual(stage1["generation"]["target"], 100)
-        self.assertGreaterEqual(stage1["input"]["max_records"], 20)
+        self.assertEqual(stage1["generation"]["target"], 500)
+        self.assertGreaterEqual(stage1["input"]["max_records"], 500)
         self.assertEqual(
             stage1["generation"]["output_dir"],
-            "environment/data/stage1",
+            "environment/data/batches/candidate_500/stage1",
         )
         self.assertEqual(subtask["output_dir"], pilot / "stage2" / "oracle")
         self.assertEqual(reports["output_dir"], pilot / "stage2")
@@ -47,7 +47,7 @@ class CanonicalStagePathsTests(TestCase):
             reports["source_subtasks"],
             subtask["output_dir"] / "subtasks.jsonl",
         )
-        scenes = root / "stage1" / "questions" / "scenes.jsonl"
+        scenes = pilot / "stage1" / "questions" / "scenes.jsonl"
         self.assertEqual(subtask["scenes_path"], scenes)
         self.assertEqual(main["scenes_path"], scenes)
         self.assertEqual(stage4["scenes_path"], scenes)
@@ -69,7 +69,10 @@ class CanonicalStagePathsTests(TestCase):
         # Stage 3 may build a larger reviewed bank than the Stage-4 pilot.
         # Avoid coupling this handoff test to an outdated Stage-3 quota.
         self.assertGreaterEqual(main["max_scenes"], stage4["max_scenes"])
-        self.assertEqual(stage4["max_scenes"], 10)
+        self.assertEqual(stage4["max_scenes"], 500)
+        self.assertEqual(stage4["scenes_path"],
+                         main["output_dir"] / "accepted_scenes.jsonl")
+        self.assertEqual(stage4["target_main_turns"], 2000)
         self.assertIsNone(stage4["branches_per_scene"])
         self.assertEqual(stage4["round_sampling_strategy"], "chronological")
         self.assertNotIn("decision_unit", stage4)
@@ -80,7 +83,7 @@ class CanonicalStagePathsTests(TestCase):
         self.assertEqual(stage4["mode"], "llm")
 
     def test_stage4_yaml_adapter_matches_runner_signature(self):
-        """Both canonical YAMLs must call the actual maintained runner API.
+        """Canonical Stage-4 YAML must match the maintained runner API.
 
         Mock only the runner execution, not the config loader, so this
         catches stale translated options before expensive 4A enumeration.
@@ -97,11 +100,7 @@ class CanonicalStagePathsTests(TestCase):
             self.assertNotIn("candidate_strategy", kwargs)
             return {"validated": True}
 
-        for config in (
-            UNTRUSTED,
-            UNTRUSTED.with_name("untrusted_orchestration_llm_pilot_10.yaml"),
-            UNTRUSTED.with_name("untrusted_orchestration_b2_filter_pilot_2.yaml"),
-        ):
+        for config in (UNTRUSTED,):
             with self.subTest(config=config.name):
                 with patch(
                     "environment.untrusted_orchestration.generate_turns.generate_turns",

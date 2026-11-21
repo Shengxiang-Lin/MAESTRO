@@ -1,55 +1,73 @@
-# MAESTRO pipeline configurations
+# MAESTRO Stage 1–4 canonical configuration
 
-Each stage has one maintained config. Stage 1 uses an output-first Goal
-planner and an executable, provenance-aware Macro DAG. Do not select
-retired generator variants through flags or configuration keys.
+The four default YAML files are production configurations for **one 500-candidate
+batch**, not the retired 10-scene pilot. Their paths all share the prefix
+`environment/data/batches/candidate_500/`.
 
-| Stage | Config | Default output | Input |
-|---|---|---|---|
-| 1 — questions and executable evidence DAG | `questions.yaml` | `environment/data/stage1/` | YAGO motif vocabulary; simulated evidence |
-| 2 — reviewed Sub-Agent reports | `subagent_reports.yaml` | `environment/data/pilots/qwen_stage234_10/stage2/` | First 10 accepted Stage 1 Scenes |
-| 3 — trusted Main dispatch | `main_orchestration.yaml` | `environment/data/pilots/qwen_stage234_10/stage3/` | Same 10 Scenes and Stage 2 reports |
-| 4 — untrusted single-turn decisions | `untrusted_orchestration.yaml` | `environment/data/pilots/qwen_stage234_10/stage4/` | Stage 1 / Stage 2 and reviewed Stage 3 clean episodes |
+| Stage | Default YAML | Scene cap | Purpose |
+| --- | --- | --- | --- |
+| 1 | `questions.yaml` | target **500** (up to 2000 seeds) | freeze ProblemSpecs, World and executable Macro DAG; review natural questions |
+| 2 | `subagent_reports.yaml` | **500** published Stage-1 Scenes | rebuild deterministic Oracle; independently review Sub-Agent feedback |
+| 3 | `main_orchestration.yaml` | **500** reviewed Stage-2 Scenes | frozen legal dispatch; independently review Main instructions and completion |
+| 4 | `untrusted_orchestration.yaml` | **500** accepted Stage-3 Scenes | Main-observable A/B1/B2/B3; one reviewed next-decision per fault |
+
+## Run
+
+Requires a local `local-qwen3.5-9b` OpenAI-compatible endpoint at
+`127.0.0.1:8807/v1`, available YAGO corpus at
+`data/world-source/YAGO-4.6`, and sufficient disk space for private
+Stage-4A candidate journals. Set `overwrite: false` (default).
 
 ```bash
 python -m environment generate-questions --config environment/configs/questions.yaml
+python -m environment quality --config environment/configs/questions.yaml
 python -m environment naturalize-subtasks --config environment/configs/subagent_reports.yaml
 python -m environment generate-main-turns --config environment/configs/main_orchestration.yaml
 python -m environment generate-untrusted-turns --config environment/configs/untrusted_orchestration.yaml
 ```
 
-**Current 10-Scene Qwen pilot:** Stage 2 and Stage 3 reuse the first
-10 accepted Scenes and reviewed Sub-Agent reports. Stage 4 reads the checked
-Stage-3 clean reference and enumerates one-atom variants on the latest
-returned feedback wave. Stage 4 uses scenario-first A/B1/B2/B3
-sampling by design; no legacy decision-mode configuration exists.
-`target_main_turns` is a decision-label budget, not a number of complete
-recovery episodes. Use new output directories after source-code changes.
+**Do not run all four commands blindly without checking each `summary.json`.**
+In particular, LLM Question Author/Critic acceptance and Stage-3 trajectory
+acceptance may be below 500. Stage 3 now creates
+`stage3/accepted_scenes.jsonl` from its accepted journal rows. Stage 4 reads
+that file, `stage3/episodes.jsonl`, and `stage2/subtasks.jsonl`, and rejects
+any mismatch between reviewed Clean Reference and trusted evidence.
 
-The Stage 1 construction and Question review phases are independently
-journaled. Its latest output is a single schema, not a selectable
-v3/v4/v5/v6 series. Only accepted Scenes enter later stages; the
-private Oracle and Gold results never enter public Main prompts.
+To inspect intermediate yields:
 
-Stage 2 always rebuilds its deterministic Oracle from current Scenes
-(no Oracle cache signatures or manifest checks). Reviewed LLM reports keep
-separate resume safeguards.
+```bash
+ROOT=environment/data/batches/candidate_500
+jq '{status, target, generated, rejected, final_scenes}' "$ROOT/stage1/summary.json"
+jq '{status, oracle_accepted_scenes, oracle_failed_scenes}' "$ROOT/stage2/summary.json"
+jq '{status, accepted_scenes, rejected_scenes, fully_llm_reviewed_scenes}' "$ROOT/stage3/summary.json"
+jq '{status, trusted_prefixes_rejected, available_scenarios, published_scenario_types, main_training_turns}' "$ROOT/stage4/summary.json"
+```
 
-Stage 2 reviewed reports are stored in `environment/data/stage2/subtasks.jsonl`;
-its private deterministic Oracle cache is under `stage2/oracle/`.
-During this pilot, Stage 4 checks and reuses the reviewed Stage 3
-`episodes.jsonl` against the frozen Stage 1/2 evidence bank.
+### Stage-4 bounds
 
-Stages 1–4 call the already-running local vLLM `local-qwen3.5-9b` over
-`http://127.0.0.1:8807/v1` for active LLM Author/Critic calls.
-No API key is required. Stage 1 deliberately bypasses its API-only model
-registry resolver; Stages 2–4 configure the endpoint explicitly. The vLLM
-server is launched with thinking disabled by default. Stage 1's optional
-Scenario Author/Critic remain disabled (`null`) as before.
-In Stage 3/4, `generation.sub_model` is the Sub-Agent model label recorded
-in the simulated Main history, not another API invocation.
+The 500-batch defaults use `max_candidates_per_round: 24`,
+`max_distractors_per_fault: 8`, `max_selected_per_round: 2`,
+`target_main_turns: 2000` and 4 LLM workers. They are **bounded candidate
+exploration** and a positive-label budget, not 2000 guaranteed training turns
+or 500 successful untrusted trajectories. B3 is prioritized among *feasible*
+candidates, but every published B3 still needs real, independent,
+Main-visible same-claim evidence. Increase budgets only after auditing the
+30-Scene pilot and use a new output directory when changing caps.
 
-Keep output directories distinct between pilot runs, seeds and modified
-configuration. The maintained entrypoints are the four stage-specific
-commands above; the old Stage 1→2→4 shortcut was removed because it skipped
-the Stage 3 Clean Reference now required by the paired pilot.
+### Stability and quality controls
+
+- Stage 2 Oracle is regenerated from the input Scenes each run. Its
+  `source_subtasks` and `source_scene_index` are derived from
+  `reporting.output_dir/oracle`; neither is a user-configurable duplicate.
+- Stage 3 keeps `freeze_dispatch: true`; routing, tools, DAG and output fields
+  are never changed by a prose Author. No Delegate fallback is published.
+- Stage 4 retains frozen prior dispatches and published reports, uses one
+  atomic fault per candidate and does **not** execute future recovery actions.
+  Template mode is for diagnostics only, never reviewed LLM supervision.
+- `status: partial` may be legitimate after independent review rejects some
+  Scenes. Never silently count rejected reports or fallback turns as accepted.
+- For evaluation, split by original Scene or stronger shared-source template
+  identity; do not place two perturbations of the same Scene into train/test.
+
+Prior local pilot YAMLs were intentionally removed from `configs/`; recreate
+small experiments by copying the canonical YAML to an isolated run directory.
