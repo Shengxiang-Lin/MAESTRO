@@ -21,8 +21,8 @@ python -m environment generate-untrusted-turns --config environment/configs/untr
 **Current 10-Scene Qwen pilot:** Stage 2 and Stage 3 reuse the first
 10 accepted Scenes and reviewed Sub-Agent reports. Stage 4 reads the checked
 Stage-3 clean reference and enumerates one-atom variants on the latest
-returned feedback wave. The maintained Stage-4 CLI accepts only
-`decision_unit: single_turn` and uses scenario-first A/B1/B2/B3 sampling.
+returned feedback wave. Stage 4 uses scenario-first A/B1/B2/B3
+sampling by design; no legacy decision-mode configuration exists.
 `target_main_turns` is a decision-label budget, not a number of complete
 recovery episodes. Use new output directories after source-code changes.
 

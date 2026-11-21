@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from environment.generate_question.execution.program_ir import Relation
-from environment.tests.test_untrusted_orchestration import sample
+from environment.tests.stage4_fixtures import sample
 from environment.untrusted_orchestration.reporting.surface import (
     sanitize_public_prose, sanitize_public_report,
 )
@@ -269,13 +269,10 @@ class LanguageExceptionTests(unittest.TestCase):
                     scenes_path=scenes, reports_path=report_path,
                     output_dir=root / "out",
                     max_scenes=1, branches_per_scene=1, workers=2,
-                    no_progress=True, scenario_mode="event_driven",
-                    candidate_strategy="enumerate",
+                    no_progress=True,
                     max_candidates_per_round=8,
                     max_distractors_per_fault=2,
                     max_selected_per_round=1,
-                    max_language_attempts_per_round=1,
-                    delayed_evidence_probability=0.0,
                 )
             choices = [
                 json.loads(row) for row in
@@ -293,10 +290,10 @@ class LanguageExceptionTests(unittest.TestCase):
                 (root / "out/journal" /
                  f"{chosen:06d}.json").read_text()
             )
-            self.assertEqual(stage4a["status"], "recovered")
+            self.assertEqual(stage4a["status"], "single_turn_planned")
             self.assertEqual(stage4c["status"], "rejected_validation")
             self.assertEqual(
-                stage4c["private_audit"]["execution_outcome"], "recovered"
+                stage4c["private_audit"]["execution_outcome"], "single_turn_planned"
             )
             self.assertEqual(
                 stage4c["private_audit"]["language_exception"]["phase"],
@@ -306,10 +303,7 @@ class LanguageExceptionTests(unittest.TestCase):
                 len(stage4c["private_audit"]["subagent_report_reviews"]), 0
             )
             self.assertEqual(stage4c["private_audit"]["main_action_reviews"], [])
-            self.assertEqual(
-                summary["candidates_execution_recovered"],
-                summary["execution_recovered_branches"],
-            )
+            self.assertEqual(summary["single_turn_accepted"], 0)
             self.assertEqual(summary["main_training_turns"], 0)
 
 

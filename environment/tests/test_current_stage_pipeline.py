@@ -152,13 +152,14 @@ class CurrentStagePipelineTests(unittest.TestCase):
         self.assertTrue(private)
         self.assertEqual(episode["trajectory"][-1]["action"], "complete")
         target = scene["macro_graph"]["reference_waves"][0][0]
-        recovered, damaged_turns, audit = build_branch(
+        pending, damaged_turns, audit = build_branch(
             scene, reports, episode, branch_round=2,
             faults=[Fault(target, "missing")],
         )
-        self.assertEqual(audit["outcome"], "recovered", audit)
-        self.assertTrue(damaged_turns)
-        self.assertEqual(recovered["trajectory"][-1]["action"], "complete")
+        self.assertEqual(audit["outcome"], "single_turn_planned", audit)
+        self.assertEqual(len(damaged_turns), 1)
+        self.assertEqual(pending["trajectory"][-1]["action"], "delegate_task")
+        self.assertTrue(pending["trajectory"][-1]["result"]["pending"])
 
 
     def test_many_row_code_owned_delivery_never_truncates(self):

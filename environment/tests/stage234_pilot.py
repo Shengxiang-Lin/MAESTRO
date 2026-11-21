@@ -8,7 +8,6 @@ This is NOT an LLM Author/Critic acceptance experiment.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -118,15 +117,13 @@ def run_pilot(output_dir: Path, *, count: int = 4,
         clean_episodes_path=output_dir / "stage3" / "episodes.jsonl",
         output_dir=output_dir / "stage4",
         max_scenes=count, branches_per_scene=feedback_rounds,
-        seed=17, decision_unit="single_turn", scenario_mode="event_driven",
+        seed=17,
         atomic_fault_kinds=list(FAULTS),
-        candidate_strategy="enumerate",
         # Exhaust feasible scenario targets in 4A; the smoke's expensive
         # language work is still bounded by one selected candidate per wave.
         max_candidates_per_round=None,
         max_distractors_per_fault=1,
         max_selected_per_round=1,
-        max_language_attempts_per_round=1,
         max_rounds=16, max_retries=1, max_parallel_tasks=4,
         workers=2, no_progress=True, overwrite=True,
         main_mode="template", report_mode="template",
@@ -203,10 +200,6 @@ def run_pilot(output_dir: Path, *, count: int = 4,
         "visible_claim_state_labels": stage4.get(
             "claim_state_status_distribution", {}
         ),
-        "naive_outcomes": dict(Counter(
-            pair.get("naive_execution_status") or "not_recorded"
-            for pair in pairs
-        )),
         "workload": workload,
     }
     with (output_dir / "stage234_pilot_summary.json").open(

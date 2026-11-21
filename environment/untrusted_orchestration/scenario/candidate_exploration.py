@@ -1,28 +1,18 @@
-"""Scenario-first single-turn enumeration with isolated legacy recovery.
+"""Enumerate executable one-atom, Main-visible scenario targets.
 
-The original Macro DAG is an executable *baseline*, not a verifier graph.
-All accepted feedback rounds are eligible. Existing returned-task faults
-and source-authorized repeated queries are preflighted on real WorkProducts.
-Delayed scenarios corrupt an earlier attempt only if an actual descendant
-was dispatched before a late clean query. No new World facts.
-
-This is deliberately limited to ONE initial fault per candidate; a
-multi-fault search is not required to obtain complex recovery trajectories.
+The frozen Stage-3 history and Macro DAG are never rewritten. A candidate
+becomes positive only when the Stage-4A public-witness check succeeds.
 """
 from __future__ import annotations
 
 from collections import defaultdict
 from copy import deepcopy
-from hashlib import sha256
-import json
 import random
 
 from environment.generate_question.execution.program_ir import ProgramError
 from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault, ATOM_TO_MODE
 from environment.untrusted_orchestration.runtime.faults import FaultUnsupported, relation_rows, run_attempt
 from .scenario_generator import make_scenario
-from .handoff_conflicts import discover_handoffs, fault_breaks_handoff
-from .same_source_recheck import discover_same_source_rechecks
 from .observable_scenarios import (
     CONSTRUCTION_ORDER, feasible_fault_targets,
 )
@@ -181,10 +171,7 @@ def _enumerate_scenario_first(
             "candidate_count_total": 0, "candidate_count_pruned": 0,
             "candidate_variant_index": None, "target_scenario": None,
         })
-        skipped["scenario_plan"] = make_scenario(
-            scene, skipped, mode="event_driven", max_fault_atoms=1,
-            delayed_evidence_probability=0.0,
-        )
+        skipped["scenario_plan"] = make_scenario(scene, skipped)
         return [skipped]
     sampled = ordered if max_candidates is None else ordered[:max_candidates]
     trials = []
@@ -202,10 +189,7 @@ def _enumerate_scenario_first(
                 seed=seed_local + slot, variant_index=variant,
             ).as_legacy_fault()],
         })
-        item["scenario_plan"] = make_scenario(
-            scene, item, mode="event_driven", max_fault_atoms=1,
-            delayed_evidence_probability=0.0,
-        )
+        item["scenario_plan"] = make_scenario(scene, item)
         item["scenario_plan"]["target_scenario"] = target
         trials.append(item)
     return trials
@@ -214,255 +198,40 @@ def _enumerate_scenario_first(
 def enumerate_round_candidates(
     scene: dict, round_plan: dict, *,
     atomic_fault_kinds: list[str],
-    max_candidates: int | None,
-    max_distractors: int | None,
-    max_fault_atoms: int = 1,
-    delayed_evidence_probability: float = 0.0,
+    max_candidates: int | None = None,
+    max_distractors: int | None = None,
     seed: int = 17,
     base_episode: dict | None = None,
-    max_parallel_tasks: int = 4,
-    preserve_stage3_history: bool = False,
 ) -> list[dict]:
-    """Return preflight-valid one-fault scenarios for one feedback round.
+    """Enumerate one-atom variants for a frozen latest-feedback batch.
 
-    The caller attaches stable *global* indices after all Scene/round
-    candidates have been created. No language model is used here.
+    Stage 4 has no delayed faults, historical prefix rewrites, synthetic
+    witnesses, or multi-round continuation. Stage 4A separately determines
+    whether each target is actually observable to Main.
     """
     if ((max_candidates is not None and max_candidates < 1)
             or (max_distractors is not None and max_distractors < 1)):
         raise ValueError("candidate_exploration_limit_invalid")
     if any(kind not in ATOM_TO_MODE for kind in atomic_fault_kinds):
         raise ValueError("unsupported_candidate_kind")
-    original_reason = round_plan["skip_reason"]
-    if original_reason == "insufficient_recovery_round_budget":
+    if round_plan["skip_reason"]:
         return [deepcopy(round_plan)]
-    if preserve_stage3_history:
-        if max_fault_atoms != 1 or delayed_evidence_probability:
-            raise ValueError("single_turn_requires_one_immediate_fault")
-        return _enumerate_scenario_first(
-            scene, round_plan, atomic_fault_kinds=atomic_fault_kinds,
-            max_candidates=max_candidates, max_distractors=max_distractors,
-            seed=seed, base_episode=base_episode,
-        )
-    # Explicitly isolated legacy multi-round recovery path below.
-    tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
-    products = _clean_products(scene)
-    eligible = []
-    for tid in round_plan["incoming_task_ids"]:
-        task = tasks[tid]
-        for kind in atomic_fault_kinds:
-            variants = _variant_count(
-                scene, task, kind, products, max_distractors,
-            )
-            for variant in range(variants):
-                if _candidate_is_real(
-                    scene, tasks[tid], kind, variant, products
-                ):
-                    eligible.append((tid, kind, variant))
-    # Method B: if a prior source-backed observation is already visible,
-    # a later Main may legitimately delegate another observation of that
-    # same source. Its result can disagree after a real one-atom fault.
-    # The extra report MUST have an accompanying Main assignment.
-    rechecks = ([] if preserve_stage3_history else
-        discover_same_source_rechecks(
-            scene, round_plan, products, base_episode=base_episode,
-            atomic_fault_kinds=atomic_fault_kinds,
-            max_parallel_tasks=max_parallel_tasks,
-        ))
-    # Method C: one old report is corrupted, actual descendants execute
-    # BEFORE a clean late recheck reveals the discrepancy. Only candidates
-    # with an already-dispatched intermediate consumer are meaningful.
-    waves = scene["macro_graph"]["reference_waves"]
-    delayed = []
-    for repeat in rechecks:
-        origin = repeat["older_wave_index"]
-        newer = repeat["new_wave_index"]
-        old_id = repeat["older_task_id"]
-        middle = {
-            tid for wave in waves[origin + 1:newer] for tid in wave
-        }
-        if not middle:
-            continue
-        queue, descendants = [old_id], set()
-        while queue:
-            current = queue.pop()
-            for task in tasks.values():
-                tid = task["task_id"]
-                if current in task["depends_on"] and tid not in descendants:
-                    descendants.add(tid)
-                    queue.append(tid)
-        if not descendants & middle:
-            continue
-        if not _candidate_is_real(
-            scene, tasks[old_id], repeat["fault_kind"],
-            repeat["fault_variant"], products,
-        ):
-            continue
-        delayed.append({
-            **repeat,
-            "construction": "delayed_consumed_error_recovery",
-            "feeds_future_tasks": [],  # Keep the ORIGINAL dependency chain.
-            "consumers_before_discovery": sorted(descendants & middle),
-        })
-    # Keep an explicit denominator when none of the three genuine causal
-    # construction routes can execute.
-    if not eligible and not rechecks and not delayed:
-        skipped = deepcopy(round_plan)
-        skipped["faults"] = []
-        skipped["fault_mode"] = None
-        skipped["skip_reason"] = "no_executable_fault_on_returned_batch"
-        skipped["sample_id"] += "-candidate-none"
-        skipped["candidate_count_total"] = 0
-        skipped["candidate_count_pruned"] = 0
-        skipped["candidate_variant_index"] = None
-        skipped["scenario_plan"] = make_scenario(
-            scene, skipped, mode="event_driven",
-            max_fault_atoms=1, delayed_evidence_probability=0.0,
-        )
-        return [skipped]
-
-    local_seed = (
-        seed + round_plan["scene_index"] * 1009
-        + round_plan["branch_round"] * 92821
+    return _enumerate_scenario_first(
+        scene, round_plan, atomic_fault_kinds=atomic_fault_kinds,
+        max_candidates=max_candidates, max_distractors=max_distractors,
+        seed=seed, base_episode=base_episode,
     )
-    ordered = _stable_candidate_order(eligible, local_seed)
-    # True history-first discovery: anchor previous public keys before
-    # deciding which erroneous newest records to synthesize. Reserve at
-    # most one B candidate per feedback round, retaining A fault variety.
-    handoffs = ({} if preserve_stage3_history else discover_handoffs(
-        scene, round_plan, products, base_episode=base_episode,
-    ))
-    history = {}
-    for tid, kind, variant in ordered:
-        plan = handoffs.get(tid)
-        if not plan or kind not in {"wrong_retrieval", "wrong_entity_binding",
-                                  "fabricated_claim", "legacy_wrong_evidence"}:
-            continue
-        fault = AtomicFault(
-            kind, tid, origin_round=round_plan["branch_round"] - 1,
-            variant_index=variant,
-        ).as_legacy_fault()
-        if fault_breaks_handoff(scene, plan, fault, products):
-            history[(tid, kind, variant)] = plan
-    first_history = next((row for row in ordered if row in history), None)
-    prioritized = ([first_history] if first_history else []) + [
-        row for row in ordered if row != first_history
-    ]
-    if max_candidates is None:
-        sampled = prioritized
-    else:
-        repeat_budget = min(len(rechecks), max_candidates // 2)
-        sampled = prioritized[:max_candidates - repeat_budget]
-    result = []
-    for slot, (tid, kind, variant) in enumerate(sampled, 1):
-        item = deepcopy(round_plan)
-        item["sample_id"] = (
-            round_plan["sample_id"] + f"-candidate-{slot:03d}"
-        )
-        item["candidate_count_total"] = len(ordered) + len(rechecks)
-        item["candidate_count_pruned"] = 0
-        item["candidate_variant_index"] = variant
-        item["skip_reason"] = None
-        item["fault_mode"] = kind
-        item["faults"] = [
-            AtomicFault(
-                kind, tid,
-                origin_round=item["branch_round"] - 1,
-                seed=local_seed + slot,
-                variant_index=variant,
-            ).as_legacy_fault()
-        ]
-        item["scenario_plan"] = make_scenario(
-            scene, item, mode="event_driven",
-            max_fault_atoms=max_fault_atoms,
-            delayed_evidence_probability=delayed_evidence_probability,
-        )
-        if (tid, kind, variant) in history:
-            item["scenario_plan"]["history_first_plan"] = history[
-                (tid, kind, variant)
-            ]
-        result.append(item)
-
-    if max_candidates is None:
-        extra = rechecks
-    else:
-        by_history = {}
-        for repeat in rechecks:
-            gap = repeat["new_wave_index"] - repeat["older_wave_index"]
-            by_history.setdefault(gap, []).append(repeat)
-        for repeats in by_history.values():
-            repeats.sort(key=lambda repeat: not bool(repeat.get("feeds_future_tasks")))
-        diverse = []
-        while any(by_history.values()):
-            for gap in sorted(by_history, reverse=True):
-                if by_history[gap]:
-                    diverse.append(by_history[gap].pop(0))
-        extra = diverse[:max(0, max_candidates - len(result))]
-    def add_recheck(patch: dict, *, delayed_fault: bool) -> None:
-        """One canonical fault/assignment constructor for B and C."""
-        slot = len(result) + 1
-        item = deepcopy(round_plan)
-        item["sample_id"] += f"-candidate-{slot:03d}"
-        item["candidate_variant_index"] = patch["fault_variant"]
-        item["skip_reason"] = None
-        item["fault_mode"] = patch["fault_kind"]
-        item["incoming_task_ids"] = [
-            *item["incoming_task_ids"], patch["new_task"]["task_id"]
-        ]
-        origin_round = (
-            patch["older_wave_index"] + 1 if delayed_fault
-            else item["branch_round"] - 1
-        )
-        target = (
-            patch["older_task_id"] if delayed_fault
-            else patch["new_task"]["task_id"]
-        )
-        item["faults"] = [AtomicFault(
-            patch["fault_kind"], target, origin_round=origin_round,
-            seed=local_seed + slot,
-            variant_index=patch["fault_variant"],
-        ).as_legacy_fault()]
-        item["scenario_plan"] = make_scenario(
-            scene, item, mode="event_driven", max_fault_atoms=1,
-            delayed_evidence_probability=0.0,
-        )
-        if delayed_fault:
-            item["scenario_plan"]["blueprint"] = (
-                "delayed_consumed_error_recovery"
-            )
-            item["scenario_plan"]["fault_atoms"][0]["origin_round"] = (
-                origin_round
-            )
-        item["scenario_plan"]["same_source_recheck_plan"] = patch
-        result.append(item)
-
-    for patch in extra:
-        add_recheck(patch, delayed_fault=False)
-    # Actual consumed error precedes the later clean and delegated recheck.
-    for patch in delayed:
-        if max_candidates is not None and len(result) >= max_candidates:
-            break
-        add_recheck(patch, delayed_fault=True)
-    total = len(ordered) + len(rechecks) + len(delayed)
-    for item in result:
-        item["candidate_count_total"] = total
-        item["candidate_count_pruned"] = total - len(result)
-    return result
 
 
 def expand_all_rounds(
     scenes: list[dict], round_plans: list[dict], *,
     atomic_fault_kinds: list[str],
-    max_candidates_per_round: int | None,
-    max_distractors_per_fault: int | None,
-    max_fault_atoms: int,
-    delayed_evidence_probability: float,
-    seed: int,
+    max_candidates_per_round: int | None = None,
+    max_distractors_per_fault: int | None = None,
+    seed: int = 17,
     base: dict[str, dict] | None = None,
-    max_parallel_tasks: int = 4,
-    preserve_stage3_history: bool = False,
 ) -> list[dict]:
-    """Expand each historical feedback round into eligible independent trials."""
+    """Expand frozen feedback rounds without mutating their Stage-3 prefix."""
     expanded = []
     for original in round_plans:
         scene = scenes[original["scene_index"]]
@@ -470,17 +239,10 @@ def expand_all_rounds(
             scene, original, atomic_fault_kinds=atomic_fault_kinds,
             max_candidates=max_candidates_per_round,
             max_distractors=max_distractors_per_fault,
-            max_fault_atoms=max_fault_atoms,
-            delayed_evidence_probability=delayed_evidence_probability,
-            seed=seed,
-            base_episode=(base or {}).get(scene["task_id"]),
-            max_parallel_tasks=max_parallel_tasks,
-            preserve_stage3_history=preserve_stage3_history,
+            seed=seed, base_episode=(base or {}).get(scene["task_id"]),
         )
         for child in children:
             child["index"] = len(expanded)
-            # The scenario is a private plan; the candidate's identity
-            # must match its final stable round identifier.
             child["scenario_plan"]["scenario_id"] = child["sample_id"]
             expanded.append(child)
     return expanded

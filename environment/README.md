@@ -15,7 +15,7 @@ python -m environment generate-questions \
 python -m environment naturalize-subtasks \
   --config environment/configs/subagent_reports.yaml
 
-# Stage 3: trusted Main-Agent decisions (optional for Stage 4)
+# Stage 3: trusted Main-Agent decisions (frozen reference for Stage 4)
 python -m environment generate-main-turns \
   --config environment/configs/main_orchestration.yaml
 
@@ -46,10 +46,10 @@ Stage 4 validates and reuses the Stage 3 Clean Reference when
   per-round Claim–Source–Dependency state and relational evidence graph,
   including source lineage, ambiguous provenance, observed contradictions,
   partial deliveries and retry replacement.
-- `private/claim_state_supervision.jsonl`: per-round state labels for
-  **globally recovered and fully reviewed** branches.
-- `private/claim_state_diagnostics.jsonl`: additional private states for
-  reviewed failures and unresolved branches; these are NOT positive SFT
+- `private/claim_state_supervision.jsonl`: pre-action state labels for
+  **accepted single-turn next decisions**, not verified global recovery.
+- `private/claim_state_diagnostics.jsonl`: private states for
+  reviewed failures and rejected candidates; these are NOT positive SFT
   labels.
 - `main_turns.jsonl`: O1-compatible Main input/output; never contains
   private state, Gold values, injected fault labels or future report text.
@@ -58,8 +58,8 @@ The state representation is *evidential*, not a hidden truth oracle:
 `unverified` and `disputed` do not mean the source is incorrect; only
 explicit independent provenance may establish `corroborated`. Task
 dependencies are teacher-side structural annotations, never invented
-visible evidence. Oracle/Gold is used only to validate the execution
-outcome and remains private.
+visible evidence. Private Oracle/Gold values stay outside Main prompts;
+Stage 4 does not claim to have executed a future task or proved recovery.
 
 Stage 4 preserves the exact Stage-3 history preceding the latest
 completed Sub-Agent batch and applies **one atomic fault per candidate**.
@@ -76,8 +76,8 @@ multi-round recovery mode.
 - `generate_question/`: Stage-1 source construction, questions, operators
 - `implement_subtask/`: Stage-2 executable oracle and reviewed messages
 - `base_orchestration/`: Stage-3 legal trusted Main dispatch and O1 formatting
-- `untrusted_orchestration/`: Stage-4 fault execution, causal repair,
-  evidence state supervision, naturalization, publication
+- `untrusted_orchestration/`: Stage-4 one-atom latest-feedback faults,
+  Main-visible issue detection, one-step delegation, review and publication
 - `configs/`: one stable YAML per function, shared output layout
 
 

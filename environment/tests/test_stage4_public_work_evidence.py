@@ -19,8 +19,8 @@ from environment.untrusted_orchestration.trajectory_builder import build_branch
 from environment.untrusted_orchestration.state_machine import (
     ExecutionState, deterministic_report,
 )
-from environment.tests.test_stage4_history_first import _scene
-from environment.tests.test_untrusted_orchestration import sample
+from environment.tests.stage4_fixtures import source_pair_scene
+from environment.tests.stage4_fixtures import sample
 
 
 def relation(values, refs=("source:F1",)):
@@ -89,7 +89,7 @@ class PublicWorkEvidenceTests(unittest.TestCase):
         self.assertIsNone(visible_work_discrepancy(clean_clause))
 
     def test_completed_attempt_can_admit_failed_extraction_in_natural_text(self):
-        scene, parent, child = _scene()
+        scene, parent, child = source_pair_scene()
         state = ExecutionState(scene, {})
         parent_attempt = state.register("parent")
         state.set_public_report("parent", deterministic_report(
@@ -118,7 +118,7 @@ class PublicWorkEvidenceTests(unittest.TestCase):
         self.assertEqual(status["status"], "accepted")
 
     def test_done_but_incomplete_is_really_llm_authored(self):
-        scene, parent, child = _scene()
+        scene, parent, child = source_pair_scene()
         state = ExecutionState(scene, {})
         state.register("parent")
         partial = state.register(
@@ -167,57 +167,6 @@ class PublicWorkEvidenceTests(unittest.TestCase):
         self.assertIn("could not extract",
                       report["finish_result"]["summary"])
 
-    def test_real_computation_error_produces_visible_recovery_decision(self):
-        """Full 4A branch, not just a parser fixture: the changed numeric
-        output must be observable before the teacher decides completion.
-        """
-        found = False
-        for i in range(10):
-            scene, rows, base = sample(i)
-            eligible = probe_atoms(scene, ["computation_error"])
-            for wave_index, wave in enumerate(
-                scene["macro_graph"]["reference_waves"]
-            ):
-                for tid in wave:
-                    if "computation_error" not in eligible.get(tid, []):
-                        continue
-                    episode, turns, audit = build_branch(
-                        scene, rows, base,
-                        branch_round=wave_index + 2,
-                        faults=[AtomicFault(
-                            "computation_error", tid, wave_index + 1,
-                        ).as_legacy_fault()],
-                    )
-                    self.assertIn(
-                        audit["execution_outcome"], {
-                            "recovered",
-                            "short_replay_horizon",
-                            "incorrect_result_after_actual_propagation",
-                        },
-                    )
-                    delivered = episode["trajectory"][wave_index][
-                        "result"]["subtask_results"][wave.index(tid)]
-                    summary = (delivered.get("finish_result") or {}).get(
-                        "summary", ""
-                    )
-                    self.assertTrue(
-                        "calculation" in summary or "count" in summary,
-                        f"Targeted computation {tid} has no observable "
-                        f"work evidence; summary={summary[:250]}",
-                    )
-                    if audit["execution_outcome"] == "recovered":
-                        self.assertTrue(turns)
-                        self.assertGreater(
-                            len(audit["runtime"]["attempt_versions"][tid]), 1,
-                        )
-                        found = True
-                        break
-                if found:
-                    break
-            if found:
-                break
-        self.assertTrue(found,
-                        "No actual recoverable calculation error was produced")
 
     def test_real_wrong_entity_binding_stays_an_executable_fault(self):
         # The public association witness must come from actual attempted

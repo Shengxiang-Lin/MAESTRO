@@ -1,64 +1,37 @@
-"""Round-local untrusted branch construction with dynamic O1 delegation.
+"""Construct one Main decision from a frozen Stage-3 feedback fork.
 
-A branch changes the latest completed Sub-Agent feedback batch before
-Main's next decision. An optional previous report may expose an additional
-record only when its own prior executor really produced that record.
-The earlier dispatch, sources, and task contracts remain unchanged.
-After branching Main sees received reports, not private fault labels, and
-does not replay obsolete clean Teacher waves.
+Stage 4A replays only the already-executed Stage-3 prefix, changing exactly
+one of the latest returned Sub-Agent reports. It never replays future agents,
+inserts historical witnesses, rewrites past Main dispatches, or tests eventual
+recovery against Gold. Stage 4B/4C review only the resulting public reports
+and one pending Main delegation.
 """
 from __future__ import annotations
 
-from collections import Counter
 from copy import deepcopy
-import json
 
 from environment.base_orchestration.action_author import (
-    action_issues, author_delegate_action, _assignment,
-    author_complete_action, _AUTHOR_SYSTEM, _CRITIC_SYSTEM,
+    _assignment, action_issues, author_delegate_action,
 )
 from environment.base_orchestration.o1_compat import (
     o1_history, o1_prompt, source_catalog,
 )
 from environment.base_orchestration.trajectory_builder import (
-    _answer_text, _strict_reports, _main_local_terminal,
-    clean_reference_identity,
+    _strict_reports, clean_reference_identity, _main_local_terminal,
 )
-from environment.untrusted_orchestration.runtime.faults import Fault, relation_rows
-from environment.untrusted_orchestration.runtime.atomic_faults import AtomicFault
-from environment.untrusted_orchestration.runtime.event_scheduler import EventScheduler
-from .state_machine import (
-    ExecutionState, deterministic_report, public_history_item,
+from environment.untrusted_orchestration.runtime.faults import Fault
+from environment.untrusted_orchestration.runtime.evidence_planning import (
+    schedule_evidence_requests,
 )
+from environment.untrusted_orchestration.rewards.decision_reward_state import (
+    capture_decision_state,
+)
+from environment.untrusted_orchestration.inspection.visible_claim_state import (
+    audit_visible_claim_states,
+)
+
+from .state_machine import ExecutionState, public_history_item
 from .reporting.author import naturalize_report
-from environment.untrusted_orchestration.runtime.evidence_planning import schedule_evidence_requests
-from .scenario.history_conflicts import expose_executed_prior_record
-from .scenario.same_source_recheck import (
-    patch_scene as patch_same_source_recheck_scene,
-    patch_clean_episode as patch_same_source_recheck_episode,
-)
-from .scenario.handoff_conflicts import expose_prior_handoff
-from .scenario.prior_observation import (
-    propose_prior_observation, patch_scene as patch_prior_observation_scene,
-    latest_scope_statement,
-)
-
-
-_MAIN_AUTHOR_SYSTEM = _AUTHOR_SYSTEM + """
-UNTRUSTED ROUND-LOCAL RECOVERY:
-This round has a real prior Sub-Agent feedback history, including results
-that may be missing, partial, contradictory, or replaced. The independent
-planner already selected the exact set of LEGAL tasks and parallelism from
-only visible evidence. You do NOT choose the action, change batch size,
-replace tools, or add verification that was not selected. For Stage 4C, the evidence-bound task instructions and handoff context
-are IMMUTABLE: output only natural Main reasoning; the compiler restores the
-exact authorized assignments from the planner. Explain the specific
-observable missing field, conflicting key, or dependency motivating the
-assigned repair. When other tasks are independent and ready, explain
-why they can proceed concurrently. NEVER claim you know which report was
-attacked or quote a private correct answer. Explicitly retain usable
-previous findings; do not imply an unperformed verification succeeded.
-"""
 
 
 _MAIN_DECISION_AUTHOR_SYSTEM = """You are the Main-Agent coordinating a
@@ -106,17 +79,6 @@ work_M identifiers, synthetic, simulator, Oracle, Gold, teacher, and Critic.
 
 Return JSON containing only:
 {"reasoning": "a natural explanation of the next investigation"}
-"""
-
-
-_MAIN_CRITIC_SYSTEM = _CRITIC_SYSTEM + """
-UNTRUSTED RECOVERY REVIEW:
-Judge whether the produced prose faithfully conveys the planner's
-fixed targeted repair, still-usable prior results, and independent
-parallel tasks. The planner has ALREADY proved dependency legality.
-A Sub-Agent done flag is execution termination, not proof of factual
-correctness. Rejected text must be repaired as prose ONLY; do not
-invent a new task, future evidence, attack origin, or hidden Gold.
 """
 
 
@@ -199,8 +161,8 @@ repair hint. Return JSON:
 
 
 def _as_public(sub_result: dict) -> dict:
-    return {k: deepcopy(v) for k, v in sub_result.items()
-            if not k.startswith("_")}
+    return {key: deepcopy(value) for key, value in sub_result.items()
+            if not key.startswith("_")}
 
 
 def _history_batch(number: int, returned: list[dict]) -> dict:
@@ -208,323 +170,11 @@ def _history_batch(number: int, returned: list[dict]) -> dict:
         "attempt": number,
         "is_parallel_batch": True,
         "subtask_results": [
-            public_history_item(result, i)
-            for i, result in enumerate(returned)
+            public_history_item(result, i) for i, result in enumerate(returned)
         ],
         "total_steps": sum(result["steps_taken"] for result in returned),
         "total_cost": 0.0,
     }
-
-
-def _rebind_poisoned_prefix_action(
-    scene: dict, action: dict, task_ids: list[str],
-    delivered: dict[str, dict], catalog: dict[str, dict],
-) -> dict:
-    """Reconstruct a historical Main dispatch from evidence visible AT THAT ROUND.
-
-    The Macro slots and executable DAG stay frozen, but an old Stage-3 action
-    cannot keep clean-only identifiers or clean-report quotes after an early
-    fault. Regenerate the public instructions/context from actual earlier
-    deliveries, never from private World/Gold or future reports.
-    """
-    current = deepcopy(action)
-    assigned = (current.get("params") or {}).get("tasks")
-    if not isinstance(assigned, list) or len(assigned) != len(task_ids):
-        raise ValueError("delayed_prefix_dispatch_slot_mismatch")
-    tasks = {task["task_id"]: task for task in scene["macro_graph"]["tasks"]}
-    refreshed = []
-    for tid, original in zip(task_ids, assigned):
-        if tid not in tasks or not isinstance(original, dict):
-            raise ValueError("delayed_prefix_unknown_task")
-        replacement = _assignment(
-            tasks[tid], catalog, delivered,
-            model_alias=original["model"],
-        )
-        # The original model/tools are immutable, already validated by the
-        # clean Stage-3 reference. Rebuilding prose must not reroute either.
-        rebuilt = deepcopy(original)
-        rebuilt["task_instruction"] = replacement["target_instruction"]
-        rebuilt["context"] = replacement["context"]
-        refreshed.append(rebuilt)
-    current["params"]["tasks"] = refreshed
-    current["reasoning"] = (
-        "I will continue the authorized investigations using the findings "
-        "actually returned so far. Dependent queries must use the reported "
-        "keys and available source evidence; their results still need "
-        "checking before the final conclusion."
-    )
-    return current
-
-
-def _replay_observed_prefix(
-    scene: dict, reviewed: dict, base_episode: dict, *,
-    branch_round: int, faults: list[Fault],
-    fault_origin_wave_index: int | None = None,
-    prefix_report_reviews: list[dict] | None = None,
-    report_author=None, report_critic=None,
-    report_revisions: int = 1,
-    model_alias: str = "model_1",
-    on_report_review=None,
-) -> tuple[ExecutionState, list[dict], list[dict], list[dict]]:
-    waves = scene["macro_graph"]["reference_waves"]
-    actions = [
-        step for step in base_episode["trajectory"]
-        if step["action"] == "delegate_task"
-    ]
-    if not 2 <= branch_round <= len(actions) + 1:
-        raise ValueError("branch_round_must_follow_actual_delegate_batch")
-    if any(len(waves[index]) !=
-           len(actions[index]["result"]["subtask_results"])
-           for index in range(branch_round - 1)):
-        raise ValueError("clean_base_alignment_invalid")
-    targets = {fault.task_id: fault for fault in faults}
-    origin = (branch_round - 2
-              if fault_origin_wave_index is None
-              else fault_origin_wave_index)
-    if not 0 <= origin <= branch_round - 2:
-        raise ValueError("fault_origin_must_precede_branch_decision")
-    if not targets or not set(targets) <= set(waves[origin]):
-        raise ValueError("fault_targets_must_be_in_declared_origin_batch")
-    if len(targets) != len(faults):
-        raise ValueError("duplicate_initial_fault_target")
-    # Only an earlier executed error can affect an intermediate consumer.
-    # Re-run those consumers against the poisoned product and replace their
-    # reports with actual observed values; never copy Stage-3 clean answers.
-    affected = set()
-    if origin < branch_round - 2:
-        probe = ExecutionState(scene, reviewed)
-        for tid in targets:
-            affected.update(probe._dependents(tid))
-
-    state = ExecutionState(scene, reviewed)
-    history, episode_prefix, fault_log = [], [], []
-    catalog = source_catalog(scene)
-    for index in range(branch_round - 1):
-        clean_action = actions[index]
-        # Re-author the *historical* Main action as well as its Sub-Agent
-        # results. A downstream action copied from the clean reference can
-        # otherwise quote a correct key while executing a poisoned key.
-        source_action = (
-            _rebind_poisoned_prefix_action(
-                scene, clean_action, waves[index], state.public_reports,
-                catalog,
-            ) if index > origin else deepcopy(clean_action)
-        )
-        previous_batch = clean_action["result"]["subtask_results"]
-        assignments = source_action["params"]["tasks"]
-        visible_results = []
-        for slot, tid in enumerate(waves[index]):
-            clean_result = previous_batch[slot]
-            fault = targets.get(tid) if index == origin else None
-            attempt = state.register(tid, fault=fault)
-            # Descendants of an early bad result must be replayed using
-            # their ACTUAL values. A newly delegated clean recheck must
-            # likewise have its own executed report rather than inheriting
-            # the earlier Sub-Agent's prose verbatim.
-            reauthor = (
-                fault is not None or tid in affected
-                or "history_recheck_of" in state.tasks[tid]
-            )
-            if not reauthor:
-                public = _as_public(clean_result)
-            else:
-                public, status = naturalize_report(
-                    state.tasks[tid], attempt,
-                    instruction=assignments[slot]["task_instruction"],
-                    model_alias=assignments[slot]["model"],
-                    reviewed=reviewed.get(tid),
-                    author=report_author, critic=report_critic,
-                    max_revisions=report_revisions,
-                )
-                public["subtask_index"] = slot
-                if prefix_report_reviews is not None:
-                    prefix_report_reviews.append({
-                        "task_id": tid,
-                        "attempt_version": attempt.version,
-                        "round": index + 1,
-                        "authoring": deepcopy(status),
-                    })
-                if on_report_review is not None:
-                    on_report_review(status)
-                if fault is not None:
-                    fault_log.append({
-                        "task_id": tid, "mode": fault.mode,
-                        "persistence": fault.persistence, "seed": fault.seed,
-                        "injection_primitive": attempt.runtime.get("primitive"),
-                        "execution": deepcopy(attempt.runtime),
-                        "report_mode": status,
-                        "origin_round": index + 1,
-                    })
-            # Even an unaffected clean report must reflect the actual
-            # public assignment for this historical wave.
-            public["task_instruction"] = assignments[slot]["task_instruction"]
-            public["model"] = assignments[slot]["model"]
-            state.set_public_report(
-                tid, public, round_number=index + 1,
-            )
-            visible_results.append(public)
-        history.append(_history_batch(index + 1, visible_results))
-        modified = deepcopy(source_action)
-        modified["result"] = {
-            **deepcopy(source_action["result"]),
-            "subtask_results": visible_results,
-            "total_subtasks": len(visible_results),
-            "all_done": all(
-                (item.get("finish_result") or {}).get("status") == "done"
-                for item in visible_results
-            ),
-        }
-        episode_prefix.append(modified)
-    if origin < branch_round - 2:
-        # A frozen trusted Stage-3 action is not automatically causal after
-        # an earlier report has changed. Reject intermediate instructions
-        # that explicitly name clean-only source values which no public
-        # report or original question has supplied at that point.
-        from .reporting.surface import delivered_records
-
-        def visible_values(report):
-            finish = (report.get("finish_result") or {})
-            records = delivered_records(finish.get("result"))
-            if records is None:
-                return set()
-            return {
-                str(value) for record in records
-                for value in record["values"].values()
-                if (type(value) in {str, int, float}
-                    and len(str(value).strip()) >= 4)
-            }
-
-        for index in range(origin + 1, branch_round - 1):
-            # The originally clean downstream reports can themselves
-            # contain fields lost or changed in the poisoned replay.
-            clean_only = set()
-            for earlier in range(origin, index):
-                for slot, tid in enumerate(waves[earlier]):
-                    if tid not in targets and tid not in affected:
-                        continue
-                    clean_only.update(
-                        visible_values(actions[earlier]["result"][
-                            "subtask_results"][slot])
-                        - visible_values(episode_prefix[earlier]["result"][
-                            "subtask_results"][slot])
-                    )
-            action = episode_prefix[index]
-            plan_text = json.dumps({
-                "reasoning": action.get("reasoning"),
-                "assignments": action.get("params"),
-            }, ensure_ascii=False)
-            known_text = str(scene.get("question", "")) + json.dumps([
-                row["result"]["subtask_results"]
-                for row in episode_prefix[:index]
-            ], ensure_ascii=False)
-            if any(value in plan_text and value not in known_text
-                   for value in clean_only):
-                raise ValueError(
-                    "delayed_prefix_dispatch_references_unseen_clean_value"
-                )
-    return state, history, episode_prefix, fault_log
-
-
-def counterfactual_continuation(
-    state: ExecutionState, *, start_wave_index: int,
-) -> dict:
-    """Execute the *old, no-repair* schedule on ACTUAL poisoned WorkProducts.
-
-    This is private comparison evidence. It is not an action policy fed to
-    Main and cannot make the branch Teacher omniscient.
-    """
-    clone = deepcopy(state)
-    waves = state.scene["macro_graph"]["reference_waves"]
-    events = []
-    for wave in waves[start_wave_index:]:
-        for tid in wave:
-            if tid in clone.current:
-                continue
-            if not clone.ready(tid):
-                return {
-                    "status": "blocked", "events": events,
-                    "answer": None, "correct": False,
-                }
-            try:
-                attempt = clone.register(tid)
-            except (ValueError, KeyError, TypeError) as exc:
-                return {
-                    "status": "execution_error",
-                    "events": events, "error": str(exc)[:200],
-                    "answer": None, "correct": False,
-                }
-            events.append({
-                "task_id": tid, "version": attempt.version,
-                "rows": clone.audit()["attempt_versions"][tid][-1]["rows"],
-            })
-    return {
-        "status": "completed" if clone.effective_answer() is not None
-                  else "blocked",
-        "answer": clone.effective_answer(),
-        "correct": clone.answer_matches_gold(),
-        "events": events,
-    }
-
-
-def _completion_template(state: ExecutionState, *, answer: str) -> dict:
-    final = state.scene["macro_graph"]["terminal_task_id"]
-    terminal = state.tasks[final]
-    references = (
-        [final] if final in state.public_reports
-        else terminal["depends_on"]
-    )
-    quotes = []
-    for tid in references[-2:]:
-        finish = state.public_reports.get(tid, {}).get("finish_result") or {}
-        result = str(finish.get("result", "")).strip().replace("\n", " ")
-        if result:
-            quotes.append(result[:360].rstrip())
-    if not quotes:
-        raise ValueError("no_visible_evidence_for_completion")
-    reason = " ".join('The returned finding states: "' + q + '".'
-                      for q in quotes)
-    reason += (
-        " These completed investigations now provide the necessary "
-        "evidence and no unresolved premise remains for the answer."
-    )
-    return {
-        "action": "complete", "reasoning": reason,
-        "params": {"answer": answer},
-    }
-
-
-def dependency_safe_batch(state: ExecutionState,
-                          repairs: list[str], ready: list[str],
-                          max_parallel_tasks: int) -> list[str]:
-    """Select a batch against ONE pre-dispatch execution snapshot.
-
-    Even if an old partial product exposes enough fields to make a
-    descendant technically ready, that descendant must not be dispatched
-    in parallel with a parent being repaired. O1 parallel delegation has
-    no intra-batch result handoff; sequential Python register() calls
-    must never be used to justify an otherwise illegal parallel wave.
-    """
-    candidates = list(dict.fromkeys(repairs + ready))
-    priority = set(repairs)
-    chosen = []
-    for tid in candidates:
-        if len(chosen) >= max_parallel_tasks:
-            break
-        if not state.ready(tid):
-            continue
-        # Repairing any ancestor can change the input version even if the
-        # currently available partial fields happen to suffice.
-        if any(tid in state._dependents(repair) for repair in priority
-               if repair != tid):
-            continue
-        if any((tid in state._dependents(other)
-                or other in state._dependents(tid))
-               for other in chosen):
-            continue
-        chosen.append(tid)
-    if not batch_has_independent_dependencies(state, chosen):
-        raise ValueError("untrusted_parallel_batch_has_dependencies")
-    return chosen
 
 
 def batch_has_independent_dependencies(state: ExecutionState,
@@ -537,351 +187,166 @@ def batch_has_independent_dependencies(state: ExecutionState,
     )
 
 
+def _replay_latest_feedback(
+    scene: dict, reviewed: dict, base_episode: dict, *,
+    branch_round: int, fault: Fault,
+    report_author=None, report_critic=None,
+    report_revisions: int = 2, on_report_review=None,
+) -> tuple[ExecutionState, list[dict], list[dict], list[dict]]:
+    """Replay actual prior batches; fault only the most recent returned wave."""
+    waves = scene["macro_graph"]["reference_waves"]
+    actions = [
+        step for step in base_episode["trajectory"]
+        if step["action"] == "delegate_task"
+    ]
+    if not 2 <= branch_round <= len(actions) + 1:
+        raise ValueError("branch_round_must_follow_actual_delegate_batch")
+    if fault.task_id not in waves[branch_round - 2]:
+        raise ValueError("fault_must_target_latest_returned_batch")
+    if any(
+        len(waves[i]) != len(actions[i]["result"]["subtask_results"])
+        for i in range(branch_round - 1)
+    ):
+        raise ValueError("clean_base_alignment_invalid")
+
+    state = ExecutionState(scene, reviewed)
+    history, trajectory, injected = [], [], []
+    for index in range(branch_round - 1):
+        action = deepcopy(actions[index])
+        returned = []
+        for slot, tid in enumerate(waves[index]):
+            assignment = action["params"]["tasks"][slot]
+            local_fault = fault if (index == branch_round - 2
+                                    and tid == fault.task_id) else None
+            attempt = state.register(tid, fault=local_fault)
+            if local_fault is not None:
+                public, status = naturalize_report(
+                    state.tasks[tid], attempt,
+                    instruction=assignment["task_instruction"],
+                    model_alias=assignment["model"],
+                    reviewed=reviewed.get(tid),
+                    author=report_author, critic=report_critic,
+                    max_revisions=report_revisions,
+                )
+                public["subtask_index"] = slot
+                injected.append({
+                    "task_id": tid, "mode": fault.mode,
+                    "persistence": fault.persistence,
+                    "seed": fault.seed,
+                    "injection_primitive": attempt.runtime.get("primitive"),
+                    "execution": deepcopy(attempt.runtime),
+                    "report_mode": status,
+                    "origin_round": branch_round - 1,
+                })
+                if on_report_review is not None:
+                    on_report_review(status)
+            else:
+                public = _as_public(
+                    actions[index]["result"]["subtask_results"][slot]
+                )
+            public["task_instruction"] = assignment["task_instruction"]
+            public["model"] = assignment["model"]
+            state.set_public_report(tid, public, round_number=index + 1)
+            returned.append(public)
+        history.append(_history_batch(index + 1, returned))
+        action["result"] = {
+            **action["result"],
+            "subtask_results": returned,
+            "total_subtasks": len(returned),
+            "all_done": all(
+                (x.get("finish_result") or {}).get("status") == "done"
+                for x in returned
+            ),
+        }
+        trajectory.append(action)
+
+    # Earlier Main assignments and returned Finish Results are immutable.
+    trusted = actions[:branch_round - 2]
+    for original, current in zip(trusted, trajectory):
+        if original["params"] != current["params"]:
+            raise ValueError("single_turn_modified_prior_main_dispatch")
+        if [x.get("finish_result") for x in
+                original["result"]["subtask_results"]] != [
+                x.get("finish_result") for x in
+                current["result"]["subtask_results"]]:
+            raise ValueError("single_turn_modified_prior_feedback")
+    return state, history, trajectory, injected
+
+
 def build_branch(
     scene: dict, stage2_rows: list[dict], base_episode: dict, *,
     branch_round: int, faults: list[Fault],
     scenario_plan: dict | None = None,
     author=None, critic=None, report_author=None, report_critic=None,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
-    max_post_fork_rounds: int | None = None,
-    max_parallel_tasks: int = 4, max_revisions: int = 2,
+    max_parallel_tasks: int = 4,
+    max_revisions: int = 2,
     report_max_revisions: int | None = None,
     main_max_revisions: int | None = None,
     sub_model: str = "qwen3-8b", model_alias: str = "model_1",
     on_report_review=None, on_main_review=None,
     validated_reference: tuple[dict, dict] | None = None,
-    single_turn: bool = False,
 ) -> tuple[dict, list[dict], dict]:
-    """Returns (public episode, accepted *post-branch* turn labels, audit)."""
+    """Return public single-turn episode, one label (if accepted), and audit."""
     if max_rounds < branch_round or max_parallel_tasks < 1:
         raise ValueError("invalid_branch_round_or_budget")
-    if max_post_fork_rounds is not None and (
-        type(max_post_fork_rounds) is not int or max_post_fork_rounds < 1
-    ):
-        raise ValueError("invalid_max_post_fork_rounds")
-    if report_max_revisions is None:
-        report_max_revisions = max_revisions
-    if main_max_revisions is None:
-        main_max_revisions = max_revisions
+    if len(faults) != 1:
+        raise ValueError("single_turn_requires_exactly_one_fault")
+    if any(f.persistence != "once" for f in faults):
+        raise ValueError("single_turn_fault_must_not_persist")
     if base_episode.get("task_id") != scene["task_id"]:
         raise ValueError("base_episode_wrong_scene")
-    # The Stage-4A coordinator validates each frozen scene exactly once.
-    # Public callers retain strict per-branch validation by default.
+    report_max_revisions = (max_revisions if report_max_revisions is None
+                            else report_max_revisions)
+    main_max_revisions = (max_revisions if main_max_revisions is None
+                          else main_max_revisions)
+
     if validated_reference is None:
         reviewed = _strict_reports(scene, stage2_rows)
         clean_identity = clean_reference_identity(scene, reviewed)
     else:
         reviewed, clean_identity = validated_reference
-    declared_reference = base_episode.get("clean_reference_id")
-    if (declared_reference is not None and
-            declared_reference != clean_identity["clean_reference_id"]):
+    declared = base_episode.get("clean_reference_id")
+    if declared is not None and declared != clean_identity["clean_reference_id"]:
         raise ValueError("stage4_clean_reference_fingerprint_mismatch")
-    # A new same-source recheck is an explicit, scenario-local Main
-    # delegation, not a ghost report appended to the latest feedback.
-    # Preserve original Stage-3 identity; mark the augmented prefix
-    # separately in the private branch audit.
-    same_source_recheck_plan = (
-        (scenario_plan or {}).get("same_source_recheck_plan")
-    )
-    if single_turn and same_source_recheck_plan is not None:
-        raise ValueError("single_turn_cannot_augment_clean_stage3_dispatch")
-    if same_source_recheck_plan is not None:
-        base_episode = patch_same_source_recheck_episode(
-            base_episode, scene, same_source_recheck_plan,
-            max_parallel_tasks=max_parallel_tasks,
-        )
-        scene = patch_same_source_recheck_scene(
-            scene, same_source_recheck_plan,
-        )
-    fault_origin_wave_index = (
-        same_source_recheck_plan["older_wave_index"]
-        if same_source_recheck_plan is not None
-        and same_source_recheck_plan.get("construction")
-            == "delayed_consumed_error_recovery"
-        else branch_round - 2
-    )
-    prefix_report_reviews = []
-    state, task_entries, trajectory, injected = _replay_observed_prefix(
-        scene, reviewed, base_episode,
-        branch_round=branch_round, faults=faults,
-        fault_origin_wave_index=fault_origin_wave_index,
-        prefix_report_reviews=prefix_report_reviews,
-        report_author=report_author, report_critic=report_critic,
-        report_revisions=report_max_revisions, model_alias=model_alias,
+
+    scenario_plan = deepcopy(scenario_plan or {})
+    if (scenario_plan.get("history_first_plan")
+            or scenario_plan.get("same_source_recheck_plan")
+            or scenario_plan.get("evidence_events")
+            or any(atom.get("origin_round") != branch_round - 1
+                   for atom in scenario_plan.get("fault_atoms", []))):
+        raise ValueError("single_turn_cannot_rewrite_history_or_future")
+    state, task_entries, trajectory, injected = _replay_latest_feedback(
+        scene, reviewed, base_episode, branch_round=branch_round,
+        fault=faults[0], report_author=report_author,
+        report_critic=report_critic,
+        report_revisions=report_max_revisions,
         on_report_review=on_report_review,
     )
-    # All comparisons use actual previously delivered evidence. An early
-    # fault may propagate before a later, Main-delegated clean witness;
-    # preserve the independently replayed clean pair only in private audit.
-    history_anchor = {"status": "not_applicable", "reason": "not_targeted"}
-    # A source-legal, earlier *public* keyed input was chosen before the
-    # atomic fault. Preserve that real prior WorkProduct and only make its
-    # already stated field explicit; no new source access is introduced.
-    if same_source_recheck_plan is not None:
-        history_anchor = {
-            "status": "generated",
-            "reason": same_source_recheck_plan.get(
-                "construction", "earlier_same_query_result"
-            ) if fault_origin_wave_index != branch_round - 2
-              else "earlier_same_query_result",
-            "task_id": same_source_recheck_plan["older_task_id"],
-            "target_task_id": same_source_recheck_plan["new_task"]["task_id"],
-            "prior_round": same_source_recheck_plan["older_wave_index"] + 1,
-            "construction": "later_main_delegated_same_source_recheck",
-        }
-    handoff_plan = (None if single_turn else
-                    (scenario_plan or {}).get("history_first_plan"))
-    if handoff_plan is not None:
-        history_anchor = expose_prior_handoff(
-            state, task_entries, trajectory, handoff_plan,
-        )
-    if (not single_turn and history_anchor["status"] != "generated"
-            and scenario_plan is not None
-            and scenario_plan.get("mode") == "event_driven"
-            and len(faults) == 1
-            and faults[0].atom_kind in {
-                "wrong_retrieval", "wrong_entity_binding",
-                "fabricated_claim", "computation_error",
-            }):
-        history_anchor = expose_executed_prior_record(
-            state, task_entries, trajectory,
-            latest_task_ids={faults[0].task_id},
-        )
-    prior_observation_patch = None
-    if (not single_turn
-            and history_anchor["status"] not in {"exposed", "generated"}
-            and scenario_plan is not None
-            and scenario_plan.get("mode") == "event_driven"
-            and len(faults) == 1
-            and faults[0].atom_kind in {
-                "wrong_retrieval", "wrong_entity_binding",
-                "fabricated_claim", "computation_error",
-            }):
-        prior_observation_patch, prior_diag = propose_prior_observation(
-            state, faults[0].task_id, branch_round=branch_round,
-            max_parallel_tasks=max_parallel_tasks,
-        )
-        if prior_observation_patch is not None:
-            previous_scene = scene
-            scene = patch_prior_observation_scene(scene, prior_observation_patch)
-            state.scene = scene
-            tid = prior_observation_patch["task_id"]
-            state.tasks[tid] = prior_observation_patch["task"]
-            state.attempts[tid] = []
-            attempt = state.register(tid)
-            index = prior_observation_patch["prior_wave_index"]
-            prior_action = trajectory[index]
-            prior_entry = task_entries[index]
-            slot = len(prior_action["result"]["subtask_results"])
-            current_wave = previous_scene["macro_graph"]["reference_waves"][
-                branch_round - 2
-            ]
-            current_slot = current_wave.index(faults[0].task_id)
-            original_assignment = trajectory[-1]["params"]["tasks"][current_slot]
-            instruction = prior_observation_patch["instruction"]
-            report = deterministic_report(
-                state.tasks[tid], attempt,
-                instruction=instruction, model_alias=model_alias,
-            )
-            report["subtask_index"] = slot
-            state.set_public_report(tid, report, round_number=index + 1)
-            prior_action["params"]["tasks"].append({
-                "task_instruction": instruction,
-                "context": (
-                    "A prior independent source survey for the same "
-                    "question. Return all observed source rows, without "
-                    "assuming which row will be needed later."
-                ),
-                "model": model_alias,
-                "tools": list(original_assignment["tools"]),
-            })
-            prior_action["result"]["subtask_results"].append(report)
-            prior_action["result"]["total_subtasks"] += 1
-            prior_action["result"]["total_steps"] += report["steps_taken"]
-            prior_action["result"]["all_done"] = all(
-                (item.get("finish_result") or {}).get("status") == "done"
-                for item in prior_action["result"]["subtask_results"]
-            )
-            prior_entry["subtask_results"].append(
-                public_history_item(report, slot)
-            )
-            prior_entry["total_steps"] += report["steps_taken"]
-            # The newest Sub-Agent must explicitly state the source lookup
-            # key it actually used. Otherwise an earlier table and a later
-            # answer are not an *observable* same-record disagreement.
-            latest_report = state.public_reports[faults[0].task_id]
-            note = latest_scope_statement(prior_observation_patch)
-            latest_report["trace_summary"] = (
-                str(latest_report.get("trace_summary") or "").rstrip()
-                + " " + note
-            ).strip()
-            state.set_public_report(
-                faults[0].task_id, latest_report,
-                round_number=branch_round - 1,
-            )
-            trajectory[-1]["result"]["subtask_results"][current_slot] = (
-                latest_report
-            )
-            task_entries[-1]["subtask_results"][current_slot] = (
-                public_history_item(latest_report, current_slot)
-            )
-            history_anchor = prior_diag
-        else:
-            history_anchor = prior_diag
-
-    paired_clean_history = None
-    if single_turn:
-        # Original Stage-3 actions/reports strictly precede the corrupted
-        # latest batch. They must never be edited or extended to invent a
-        # witness for the current discrepancy.
-        trusted_actions = [a for a in base_episode["trajectory"]
-                           if a.get("action") == "delegate_task"]
-        for idx, candidate_action in enumerate(trajectory[:-1]):
-            trusted = trusted_actions[idx]
-            if candidate_action.get("params") != trusted.get("params"):
-                raise ValueError("single_turn_modified_prior_main_dispatch")
-            delivered = (candidate_action.get("result") or {}).get("subtask_results", [])
-            original = (trusted.get("result") or {}).get("subtask_results", [])
-            if len(delivered) != len(original) or any(
-                (observed.get("finish_result") or {}) !=
-                (clean.get("finish_result") or {})
-                for observed, clean in zip(delivered, original)
-            ):
-                raise ValueError("single_turn_modified_prior_feedback")
-    if history_anchor["status"] in {"exposed", "generated"}:
-        if fault_origin_wave_index < branch_round - 2:
-            # Entire paired prefix, including the original downstream
-            # values, comes from the unpoisoned source-local dispatches.
-            paired_clean_history = deepcopy(
-                base_episode["trajectory"][:branch_round - 1]
-            )
-        else:
-            paired_clean_history = deepcopy(trajectory)
-            last_wave = scene["macro_graph"]["reference_waves"][branch_round - 2]
-            for fault in faults:
-                slot = last_wave.index(fault.task_id)
-                paired_clean_history[-1]["result"]["subtask_results"][slot] = (
-                    deepcopy(base_episode["trajectory"][branch_round - 2][
-                        "result"]["subtask_results"][slot])
-                )
-    before = ({"status": "not_evaluated_single_turn"} if single_turn else
-              counterfactual_continuation(
-                  state, start_wave_index=branch_round - 1,
-              ))
-    # All error origins are causal events, not historical rewrites.
-    # An old round_fork is simply one atom on the most recent batch.
-    scenario_plan = deepcopy(scenario_plan) if scenario_plan else {
-        "scenario_id": scene["task_id"] + f"-fork-{branch_round}",
-        "mode": "round_fork", "blueprint": "immediate_feedback_fault",
-        "fault_atoms": [{
-            "kind": fault.atom_kind or (
-                "legacy_wrong_evidence" if fault.mode == "wrong" else
-                "no_result" if fault.mode == "missing" else
-                "incomplete_retrieval"
-            ),
-            "task_id": fault.task_id, "origin_round": branch_round - 1,
-            "seed": fault.seed, "persistence": fault.persistence,
-        } for fault in faults],
-        "evidence_events": [],
-    }
-    scheduler = EventScheduler(
-        scenario_plan.get("evidence_events", []),
-        state=state, fork_round=branch_round,
-    )
-    state.cross_source_checks_enabled = (
-        scenario_plan.get("mode") == "event_driven"
-    )
-    future_atoms = {}
-    for atom in scenario_plan.get("fault_atoms", []):
-        if atom["origin_round"] >= branch_round:
-            if atom["task_id"] in state.current:
-                raise ValueError("future_fault_targets_historical_attempt")
-            if atom["task_id"] in future_atoms:
-                raise ValueError("duplicate_future_fault_target")
-            future_atoms[atom["task_id"]] = AtomicFault(
-                kind=atom["kind"], task_id=atom["task_id"],
-                origin_round=atom["origin_round"],
-                persistence=atom.get("persistence", "once"),
-                seed=atom.get("seed", 0), atom_id=atom.get("atom_id", "F"),
-            )
-    applied_future_atoms = set()
-    applied_fault_events = [{
-        "task_id": fault.task_id,
-        "kind": fault.atom_kind or fault.mode,
-        "actual_execution_round": fault_origin_wave_index + 1,
-        "where": ("historical_consumed_feedback"
-                  if fault_origin_wave_index < branch_round - 2
-                  else "incoming_feedback"),
-    } for fault in faults]
+    state.cross_source_checks_enabled = True
     catalog = source_catalog(scene)
-    retry_counts = Counter()
-    turns = []
-    decisions = []
-    # Actual earlier poisoned reports, dependent reports, and the late
-    # clean witness must all be independently materialized in Stage 4B.
-    report_reviews = prefix_report_reviews
-    main_reviews = []
-    evidence_plan = []
-    decision_reward_states = []
-    observable_issue_snapshots = []
-    stopped = None
-    final_mode = None
     graph = scene["macro_graph"]
-    terminal = graph["terminal_task_id"]
-
-    def emit(turn_number: int, action: dict, mode: str,
-             *, kind: str, task_ids: list[str] | None = None) -> None:
-        history = o1_history(task_entries)
-        turns.append({
-            "sample_id": (
-                scene["task_id"] + f"-branch-{branch_round:02d}" +
-                f"-round-{turn_number:02d}"
-            ),
-            "task_id": scene["task_id"],
-            "round": turn_number,
-            "input": {"subtask_history": history},
-            "output": deepcopy(action),
-            "generation_mode": mode,
-        })
-        decisions.append({
-            "round": turn_number, "decision_kind": kind,
-            "task_ids": list(task_ids or []),
-            "mode": mode, "cost_before": state.total_cost,
-            "visible_history": history,
-        })
-
-    # A short branch is a *budget*, never permission to manufacture a
-    # completed episode. If it expires, retain the partial execution in
-    # private diagnostics and do not publish positive SFT decisions.
-    replay_end = min(
-        max_rounds,
-        branch_round + max_post_fork_rounds - 1
-        if max_post_fork_rounds is not None else max_rounds,
+    round_number = branch_round
+    visible_issues = state.observable_issues()
+    observable_issue_snapshots = [{
+        "decision_round": round_number,
+        "issues": visible_issues, "private_only": True,
+    }]
+    recent_issue = any(
+        item.get("reported_round") == round_number - 1
+        for item in visible_issues
+    ) or any(
+        event.get("latest_round") == round_number - 1
+        for event in state.active_public_conflicts()
     )
-    for round_number in range(branch_round, replay_end + 1):
-        if state.total_cost > max_cost:
-            stopped = "budget_exhausted"
-            break
+
+    evidence_plan, decisions, turns, main_reviews, reward_states = [], [], [], [], []
+    stopped = None
+    if not recent_issue:
+        stopped = "no_current_visible_issue"
+    else:
         scheduling = state.scheduling_state()
-        visible_issues = state.observable_issues()
-        observable_issue_snapshots.append({
-            "decision_round": round_number,
-            "issues": visible_issues,
-            "private_only": True,
-        })
-        if single_turn:
-            # A new sample must be motivated by the most recently delivered
-            # feedback, not an undisclosed Oracle fault or an old unrelated issue.
-            current_witness = any(
-                item.get("reported_round") == branch_round - 1
-                for item in visible_issues
-            ) or any(
-                event.get("latest_round") == branch_round - 1
-                for event in state.active_public_conflicts()
-            )
-            if not current_witness:
-                stopped = "no_current_visible_issue"
-                break
         repairs = [
             tid for tid in scheduling["repair"]
             if len(state.attempts[tid]) <= max_retries and state.ready(tid)
@@ -890,383 +355,148 @@ def build_branch(
             tid for tid in scheduling["ready"]
             if tid not in repairs
         ]
-        ready = scheduler.available(ready, round_number)
-        event_pending = any(
-            row["status"] == "scheduled"
-            for row in scheduler.audit()
-        )
-        if (terminal in ready and _main_local_terminal(graph)
-                and not repairs):
-            # Deterministic local computation on *current* parent
-            # WorkProducts. No future Oracle/clean report can leak.
+        terminal = graph["terminal_task_id"]
+        if terminal in ready and _main_local_terminal(graph) and not repairs:
             state.register(terminal)
             ready.remove(terminal)
-        can_complete = (
-            not repairs and state.effective_answer() is not None
-            and not ready and not event_pending
-        )
-        # Record the FULL decision choice set before the Author or any new
-        # Sub-Agent observations. The record is private training metadata.
-        from environment.untrusted_orchestration.rewards.decision_reward_state import capture_decision_state
-        decision_reward_states.append(capture_decision_state(
+        can_complete = (not repairs and state.effective_answer() is not None
+                        and not ready)
+        reward_states.append(capture_decision_state(
             state, round_number=round_number, repairs=repairs,
             ready=ready, blocked=scheduling["blocked"],
             max_parallel_tasks=max_parallel_tasks, catalog=catalog,
-            model_alias=model_alias, event_pending=event_pending,
+            model_alias=model_alias, event_pending=False,
             can_complete=can_complete,
         ))
-        if single_turn and not repairs and not ready:
+        if not repairs and not ready:
             stopped = "no_legal_current_action"
-            break
-        if can_complete:
-            # A targeted recheck is not proof that two delivered independent
-            # claims now agree. Otherwise the simulator could promote a
-            # still-publicly-contested branch to positive SFT via Gold.
-            if state.unresolved_cited_conflicts():
-                stopped = "unresolved_visible_claim_conflict"
-                break
-            # A fabricated result can be unseen as wrong when Main has
-            # no independent evidence. Do not publish a "successful"
-            # recovery merely because the PRIVATE executor still holds
-            # a clean product that was never delivered to Main.
-            if any(
-                item.runtime.get("report_fault_kind") == "fabricated_claim"
-                for item in state.current.values()
-            ):
-                stopped = "unverified_report_claim"
-                break
-            if not state.answer_matches_gold():
-                stopped = "incorrect_result_after_actual_propagation"
-                break
-            history = o1_history(task_entries)
-            prompt = o1_prompt(
-                scene, task_entries, attempt=round_number,
-                max_attempts=max_rounds, sub_model=sub_model,
-                model_alias=model_alias,
+        elif state.total_cost > max_cost:
+            stopped = "budget_exhausted"
+        else:
+            batch, requests, assignments = schedule_evidence_requests(
+                state, repairs=repairs, ready=ready,
+                round_number=round_number, max_parallel_tasks=max_parallel_tasks,
+                catalog=catalog, model_alias=model_alias,
             )
-            template = _completion_template(
-                state, answer=_answer_text(scene),
-            )
-            action, status = author_complete_action(
-                template=template, prompt=prompt,
-                delivered={
-                    k: v for k, v in state.public_reports.items()
-                    if isinstance(v.get("finish_result"), dict)
-                },
-                author=author, critic=critic,
-                max_revisions=main_max_revisions,
-            )
-            main_reviews.append({
-                "round": round_number, "kind": "complete",
-                "authoring": deepcopy(status),
-            })
-            if on_main_review is not None:
-                on_main_review(status)
-            emit(round_number, action, status["mode"], kind="complete")
-            final_mode = status["mode"]
-            trajectory.append({
-                "attempt": round_number, "action": "complete",
-                "reasoning": action["reasoning"],
-                "params": deepcopy(action["params"]),
-                "result": {"success": True, "done": True},
-            })
-            stopped = "recovered"
-            break
-
-        # Evidence gaps drive prioritization globally. Macro IR is only
-        # used after selection to enforce executable dependency and source
-        # constraints for each grouped Sub-Agent assignment.
-        batch, requests, assignments = schedule_evidence_requests(
-            state, repairs=repairs, ready=ready,
-            round_number=round_number,
-            max_parallel_tasks=max_parallel_tasks,
-            catalog=catalog, model_alias=model_alias,
-        )
-        if not batch:
-            stopped = (
-                "event_wait_without_legal_action"
-                if event_pending else "unresolved_dependencies"
-            )
-            break
-        # One dispatch can fulfill several atomic evidence requests.
-        # Request IDs and Macro bindings are PRIVATE simulation metadata,
-        # not fields permitted in the Main LLM's assignment prompt.
-        grouped_ids = [
-            item.pop("grouped_request_ids") for item in assignments
-        ]
-        evidence_plan.append({
-            "round": round_number,
-            "evidence_requests": deepcopy(requests),
-            "dispatch": [{
-                "assignment_id": f"R{round_number:02d}-A{i:02d}",
-                "evidence_request_ids": grouped_ids[i],
-                "execution_binding": {"macro_task_id": tid},
-                "assignment_contract": deepcopy(assignment),
-            } for i, (tid, assignment) in
-                enumerate(zip(batch, assignments))],
-            "parallel": len(batch) > 1,
-        })
-        history = o1_history(task_entries)
-        prompt = o1_prompt(
-            scene, task_entries, attempt=round_number,
-            max_attempts=max_rounds, sub_model=sub_model,
-            model_alias=model_alias,
-        )
-        action, status = author_delegate_action(
-            assignments=assignments, prompt=prompt,
-            author=author, critic=critic,
-            max_revisions=main_max_revisions,
-            author_system=_MAIN_AUTHOR_SYSTEM,
-            critic_system=_MAIN_CRITIC_SYSTEM,
-        )
-        main_reviews.append({
-            "round": round_number, "kind": "delegate",
-            "authoring": deepcopy(status),
-        })
-        if on_main_review is not None:
-            on_main_review(status)
-        if action is None:
-            stopped = "main_action_not_accepted"
-            decisions.append({
-                "round": round_number,
-                "teacher_batch": batch,
-                "failed_authoring": status,
-            })
-            break
-        if action_issues(action, assignments, prompt=prompt):
-            raise ValueError("invalid_dynamic_o1_main_action")
-        if not batch_has_independent_dependencies(state, batch):
-            raise ValueError("invalid_parallel_delegation")
-        emit(
-            round_number, action, status["mode"],
-            kind="delegate", task_ids=batch,
-        )
-        if single_turn:
-            # The label is this ONE Main decision. No future Sub-Agent is
-            # executed or hallucinated; this pending handoff has no Result.
-            trajectory.append({
-                "attempt": round_number, "action": "delegate_task",
-                "reasoning": action["reasoning"],
-                "params": deepcopy(action["params"]),
-                "result": {
-                    "subtask_results": [], "total_subtasks": 0,
-                    "all_done": False, "pending": True,
-                },
-            })
-            stopped = "single_turn_planned"
-            break
-        # A parallel batch is atomic from Main's perspective: all tasks
-        # consume the snapshot that existed BEFORE the batch was launched.
-        # No task can secretly use an earlier sibling's new WorkProduct.
-        parent_snapshot = {
-            task_id: item.version for task_id, item in state.current.items()
-        }
-        returned = []
-        for slot, tid in enumerate(batch):
-            if not state.ready(tid):
-                raise ValueError("parallel_task_became_unready:" + tid)
-            if any(
-                parent_snapshot.get(p) != state.current[p].version
-                for p in state.tasks[tid]["depends_on"]
-            ):
-                raise ValueError("parallel_batch_consumed_new_parent:" + tid)
-            dispatched = action["params"]["tasks"][slot]
-            fault = next((
-                f for f in faults if f.task_id == tid
-                and f.persistence == "same_path"
-                and tid in repairs
-            ), None)
-            future = future_atoms.get(tid)
-            if (future is not None
-                    and round_number >= future.origin_round
-                    and (tid not in applied_future_atoms
-                         or future.persistence == "same_path")):
-                fault = future.as_legacy_fault()
-                applied_future_atoms.add(tid)
-                applied_fault_events.append({
-                    "task_id": tid, "kind": future.kind,
-                    "actual_execution_round": round_number,
-                    "where": "future_execution",
+            if not batch:
+                stopped = "unresolved_dependencies"
+            else:
+                request_ids = [
+                    item.pop("grouped_request_ids") for item in assignments
+                ]
+                evidence_plan.append({
+                    "round": round_number,
+                    "evidence_requests": deepcopy(requests),
+                    "dispatch": [{
+                        "assignment_id": f"R{round_number:02d}-A{i:02d}",
+                        "evidence_request_ids": request_ids[i],
+                        "execution_binding": {"macro_task_id": tid},
+                        "assignment_contract": deepcopy(assignment),
+                    } for i, (tid, assignment) in
+                    enumerate(zip(batch, assignments))],
+                    "parallel": len(batch) > 1,
                 })
-            attempt = state.register(tid, fault=fault)
-            scheduler.note_execution(tid, round_number)
-            if tid in repairs:
-                retry_counts[tid] += 1
-            report, report_status = naturalize_report(
-                state.tasks[tid], attempt,
-                instruction=dispatched["task_instruction"],
-                model_alias=dispatched["model"],
-                reviewed=reviewed.get(tid),
-                author=report_author, critic=report_critic,
-                max_revisions=report_max_revisions,
-            )
-            report_reviews.append({
-                "task_id": tid, "attempt_version": attempt.version,
-                "round": round_number,
-                "authoring": deepcopy(report_status),
-            })
-            if on_report_review is not None:
-                on_report_review(report_status)
-            report["subtask_index"] = slot
-            public = _as_public(report)
-            state.set_public_report(
-                tid, public, round_number=round_number,
-            )
-            returned.append(public)
-        task_entries.append(_history_batch(round_number, returned))
-        trajectory.append({
-            "attempt": round_number,
-            "action": "delegate_task",
-            "reasoning": action["reasoning"],
-            "params": deepcopy(action["params"]),
-            "result": {
-                "subtask_results": returned,
-                "total_subtasks": len(returned),
-                "all_done": all(
-                    (item.get("finish_result") or {}).get("status") == "done"
-                    for item in returned
-                ),
-                "total_cost": 0.0,
-                "total_steps": sum(x["steps_taken"] for x in returned),
-            },
-        })
-    if stopped is None:
-        stopped = (
-            "short_replay_horizon" if replay_end < max_rounds
-            else "max_decision_rounds"
-        )
-    if stopped == "recovered" and (
-        set(future_atoms) - applied_future_atoms
-        or any(x["status"] != "released" for x in scheduler.audit())
-    ):
-        stopped = "scenario_events_not_realized"
-    # Never advertise a delayed *recovery* if the supposed late evidence
-    # did not expose an actual visible contradiction followed by a real
-    # upstream replacement and downstream invalidation.
-    if (stopped == "recovered"
-            and scenario_plan.get("blueprint")
-                == "delayed_independent_evidence"
-            and (not state.detected_conflicts or not state.invalidations)):
-        stopped = "delayed_blueprint_not_demonstrated"
-    # For delayed propagation, positive supervision REQUIRES an observable
-    # conflict, invalidation of a real pre-discovery consumer, and an actual
-    # post-discovery re-execution of that consumer. A correct final answer
-    # alone is insufficient.
-    delayed_causal_audit = None
-    if (same_source_recheck_plan is not None
-            and same_source_recheck_plan.get("construction")
-                == "delayed_consumed_error_recovery"):
-        old_id = same_source_recheck_plan["older_task_id"]
-        expected_consumers = set(
-            same_source_recheck_plan["consumers_before_discovery"]
-        )
-        invalidated = {
-            item["stale_task"] for item in state.invalidations
-            if item["stale_task"] in expected_consumers
-        }
-        recomputed = {
-            tid for tid in invalidated
-            if len(state.attempts.get(tid, [])) >= 2
-            and state.current[tid].status == "done"
-        }
-        # A dependency edge alone is not sufficient: at least one
-        # completed intermediate WorkProduct must ACTUALLY differ from
-        # its clean executable counterpart before the late witness.
-        impacted = {
-            tid for tid in expected_consumers
-            if reviewed.get(tid) is not None
-            and state.attempts.get(tid)
-            and relation_rows(state.attempts[tid][0].product)
-                != reviewed[tid].get("answer_with_provenance")
-        }
-        observable = any(
-            event.get("kind") == "cross_round_report_disagreement"
-            and set(event.get("compared_parent_tasks", [])) ==
-                {old_id, same_source_recheck_plan["new_task"]["task_id"]}
-            for event in state.detected_conflicts
-        )
-        delayed_causal_audit = {
-            "fault_origin_round": fault_origin_wave_index + 1,
-            "discovery_main_round": branch_round,
-            "pre_discovery_consumers": sorted(expected_consumers),
-            "impacted_consumers": sorted(impacted),
-            "invalidated_consumers": sorted(invalidated),
-            "recomputed_consumers": sorted(recomputed),
-            "observable_conflict": observable,
-        }
-        if stopped == "recovered" and not (
-            observable and impacted and invalidated
-            and invalidated & impacted and invalidated <= recomputed
-        ):
-            stopped = "delayed_propagation_not_demonstrated"
-    # LLM publication must retain both independently reviewed surfaces.
-    execution_outcome = stopped
-    if stopped == "recovered" and (
-        (report_author is not None and any(
-            x["authoring"]["mode"] == "grounded_template_fallback"
-            for x in report_reviews
-        )) or (author is not None and any(
-            x["authoring"]["mode"] ==
-            "teacher_grounded_completion_fallback"
-            for x in main_reviews
-        ))
-    ):
-        stopped = "language_review_unaccepted"
-    success = stopped in {"recovered", "single_turn_planned"}
-    # Teacher-side state is computed from the ACTUAL public report text in
-    # each returned batch, including injected faults and retry replacements.
-    # It is never passed to Main (which still sees only O1 formatted history).
-    from environment.untrusted_orchestration.inspection.visible_claim_state import audit_visible_claim_states
+                prompt = o1_prompt(
+                    scene, task_entries, attempt=round_number,
+                    max_attempts=max_rounds, sub_model=sub_model,
+                    model_alias=model_alias,
+                )
+                action, status = author_delegate_action(
+                    assignments=assignments, prompt=prompt,
+                    author=author, critic=critic,
+                    max_revisions=main_max_revisions,
+                )
+                main_reviews.append({
+                    "round": round_number, "kind": "delegate",
+                    "authoring": deepcopy(status),
+                })
+                if on_main_review is not None:
+                    on_main_review(status)
+                if action is None:
+                    stopped = "main_action_not_accepted"
+                    decisions.append({
+                        "round": round_number, "teacher_batch": batch,
+                        "failed_authoring": status,
+                    })
+                else:
+                    if action_issues(action, assignments, prompt=prompt):
+                        raise ValueError("invalid_dynamic_o1_main_action")
+                    if not batch_has_independent_dependencies(state, batch):
+                        raise ValueError("invalid_parallel_delegation")
+                    history = o1_history(task_entries)
+                    turns.append({
+                        "sample_id": (scene["task_id"] +
+                                      f"-branch-{branch_round:02d}" +
+                                      f"-round-{round_number:02d}"),
+                        "task_id": scene["task_id"],
+                        "round": round_number,
+                        "input": {"subtask_history": history},
+                        "output": deepcopy(action),
+                        "generation_mode": status["mode"],
+                    })
+                    decisions.append({
+                        "round": round_number, "decision_kind": "delegate",
+                        "task_ids": list(batch),
+                        "mode": status["mode"],
+                        "cost_before": state.total_cost,
+                        "visible_history": history,
+                    })
+                    trajectory.append({
+                        "attempt": round_number,
+                        "action": "delegate_task",
+                        "reasoning": action["reasoning"],
+                        "params": deepcopy(action["params"]),
+                        "result": {
+                            "subtask_results": [], "total_subtasks": 0,
+                            "all_done": False, "pending": True,
+                        },
+                    })
+                    stopped = "single_turn_planned"
+
     decision_bindings = {
-        d["round"]: d["task_ids"] for d in decisions
-        if d.get("decision_kind") == "delegate"
+        row["round"]: row["task_ids"] for row in decisions
+        if row.get("decision_kind") == "delegate"
     }
-    report_bindings = {}
-    for action in trajectory:
-        if action.get("action") != "delegate_task":
-            continue
-        number = action["attempt"]
-        report_bindings[number] = (
-            graph["reference_waves"][number - 1]
-            if number < branch_round
-            else decision_bindings[number]
+    report_bindings = {
+        step["attempt"]: (
+            graph["reference_waves"][step["attempt"] - 1]
+            if step["attempt"] < branch_round
+            else decision_bindings[step["attempt"]]
         )
+        for step in trajectory if step.get("action") == "delegate_task"
+    }
     visible_claim_state = audit_visible_claim_states(
         scene,
         [step for step in trajectory
          if not (step.get("result") or {}).get("pending")],
         task_ids_by_round=report_bindings,
     )
+    accepted = stopped == "single_turn_planned"
     episode = {
-        "task_id": scene["task_id"], "question": scene["question"],
-        "format": ("maestro_untrusted_single_turn.v1" if single_turn
-                   else "maestro_untrusted_round_branch.v1"),
+        "task_id": scene["task_id"],
+        "question": scene["question"],
+        "format": "maestro_untrusted_single_turn.v1",
         "clean_reference_id": clean_identity["clean_reference_id"],
         "branch_round": branch_round,
         "trajectory": trajectory,
         "outcome": stopped,
-        "recovered": stopped == "recovered",
         "main_decision_rounds": len(trajectory),
     }
     audit = {
-        "task_id": scene["task_id"], "branch_round": branch_round,
+        "task_id": scene["task_id"],
+        "branch_round": branch_round,
         "clean_reference_identity": clean_identity,
         "faults": injected,
-        "history_conflict_anchor": history_anchor,
-        "prior_observation_patch": prior_observation_patch,
-        "same_source_recheck_plan": same_source_recheck_plan,
-        "delayed_causal_audit": delayed_causal_audit,
-        "paired_clean_history": paired_clean_history,
-        "counterfactual_unrepaired": before,
         "runtime": state.audit(),
         "visible_claim_state": visible_claim_state,
         "observable_issue_snapshots": observable_issue_snapshots,
         "event_scenario": scenario_plan,
-        "event_timeline": scheduler.audit(),
-        "fault_events_applied": applied_fault_events,
-        "unrealized_future_fault_tasks": sorted(
-            set(future_atoms) - applied_future_atoms
-        ),
+        "fault_events_applied": [{
+            "task_id": faults[0].task_id,
+            "kind": faults[0].atom_kind or faults[0].mode,
+            "actual_execution_round": branch_round - 1,
+            "where": "incoming_feedback",
+        }],
         "decision_audit": decisions,
         "decision_reward_settings": {
             "max_parallel_tasks": max_parallel_tasks,
@@ -1274,24 +504,27 @@ def build_branch(
             "model_alias": model_alias,
         },
         "evidence_plan": evidence_plan,
-        "decision_reward_states": decision_reward_states,
-        "subagent_report_reviews": report_reviews,
+        "decision_reward_states": reward_states,
+        "subagent_report_reviews": [{
+            "task_id": item["task_id"],
+            "attempt_version": 1,
+            "round": branch_round - 1,
+            "authoring": item["report_mode"],
+        } for item in injected],
         "main_action_reviews": main_reviews,
-        "completion_generation_mode": final_mode,
-        "execution_outcome": execution_outcome,
-        "execution_recovered": execution_outcome == "recovered",
-        "language_review_accepted": stopped != "language_review_unaccepted",
+        "completion_generation_mode": None,
+        "execution_outcome": stopped,
+        "language_review_accepted": accepted,
         "parallel_batches_verified": all(
             batch_has_independent_dependencies(
-                state, d.get("task_ids", []),
-            ) for d in decisions if d.get("decision_kind") == "delegate"
+                state, item.get("task_ids", [])
+            ) for item in decisions
+            if item.get("decision_kind") == "delegate"
         ),
         "outcome": stopped,
-        "decision_unit": "single_turn" if single_turn else "recovery_episode",
-        "stage3_prior_history_preserved": single_turn,
-        "accepted_turns": len(turns) if success else 0,
+        "decision_unit": "single_turn",
+        "stage3_prior_history_preserved": True,
+        "accepted_turns": len(turns) if accepted else 0,
         "private_only": True,
     }
-    # No incorrect or unresolved teacher actions are exported as
-    # positive supervised labels. They remain inspectable as Episodes.
-    return episode, turns if success else [], audit
+    return episode, turns if accepted else [], audit

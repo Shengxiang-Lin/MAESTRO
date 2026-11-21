@@ -23,8 +23,6 @@ from environment.base_orchestration.o1_compat import (
 from environment.base_orchestration.trajectory_builder import _strict_reports
 from environment.generate_question.execution.program_ir import Relation
 from .reporting.author import naturalize_report
-from .scenario.prior_observation import patch_scene as patch_prior_observation_scene
-from .scenario.same_source_recheck import patch_scene as patch_same_source_recheck_scene
 from .reporting.surface import sanitize_public_report
 from environment.untrusted_orchestration.orchestration.reasoning_fidelity import (
     reasoning_evidence_issues, reasoning_action_issues,
@@ -32,7 +30,7 @@ from environment.untrusted_orchestration.orchestration.reasoning_fidelity import
 )
 from environment.untrusted_orchestration.inspection.visible_history import visible_history_reasoning_issues
 from environment.untrusted_orchestration.orchestration.main_decision_contract import (
-    build_main_decision_contract, critic_denies_confirmed_conflict, repeated_query_conflicts,
+    build_main_decision_contract, critic_denies_confirmed_conflict,
 )
 from .state_machine import Attempt
 from environment.untrusted_orchestration.inspection.visible_claim_state import audit_visible_claim_states
@@ -113,12 +111,6 @@ def author_branch_reports(scene: dict, stage2_rows: list[dict],
     # Stage 4 changes the latest delivered report and may expose an
     # already-executed older record; it never adds a hidden verifier task.
     reviewed = _strict_reports(scene, stage2_rows)
-    scene = patch_same_source_recheck_scene(
-        scene, audit.get("same_source_recheck_plan"),
-    )
-    scene = patch_prior_observation_scene(
-        scene, audit.get("prior_observation_patch"),
-    )
     tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
     versions = audit["runtime"]["attempt_versions"]
     decision_ids = {
@@ -390,12 +382,6 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
         visible_step["result"]["subtask_results"] = [
             sanitize_public_report(report) for report in report_list
         ]
-    scene = patch_same_source_recheck_scene(
-        scene, audit.get("same_source_recheck_plan"),
-    )
-    scene = patch_prior_observation_scene(
-        scene, audit.get("prior_observation_patch"),
-    )
     fork = audit["branch_round"]
     plans = {p["round"]: p for p in audit.get("evidence_plan", [])}
     tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
@@ -488,10 +474,6 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                 decision_contract = build_main_decision_contract(
                     entries, visible_goals, number_of_tasks=len(assignments),
                 )
-                history_conflicts = repeated_query_conflicts(
-                    tasks, latest, latest_rounds, latest_parent_versions,
-                )
-                decision_contract["visible_evidence"]["confirmed_repeated_query_conflicts"] = history_conflicts
                 author_system = _MAIN_DECISION_AUTHOR_SYSTEM
                 if any(goal.get("verification_focus") for goal in visible_goals):
                     author_system += (
@@ -501,14 +483,6 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                         " remain in the same Macro handoff, but are NOT"
                         " additional confirmed contradictions. Do not"
                         " claim either side of the dispute has been proved.\n"
-                    )
-                if history_conflicts:
-                    author_system += (
-                        "\nThe following already received reports describe the same "
-                        "delegated source query with the same prerequisite input versions. "
-                        "Their returned values still disagree. Explain the targeted check "
-                        "without treating a calculated downstream answer as verification:\n"
-                        + json.dumps(history_conflicts, ensure_ascii=False)
                     )
                 if any(goal["operation"] == "derive_from_returned_evidence"
                        for goal in visible_goals):
@@ -528,7 +502,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                             text, assignments, question=scene["question"],
                             visible_text=prompt + " " + json.dumps(
                                 assignments, ensure_ascii=False
-                            ) + " " + json.dumps(history_conflicts, ensure_ascii=False),
+                            ),
                         )
                         + visible_history_reasoning_issues(
                             text, decision_contract["prior_field_activity"])
@@ -719,7 +693,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                        "stage4c_dispatch_validation_rejected",
                    ))
                    else failure)
-    elif execution_outcome in {"recovered", "single_turn_planned"} and (
+    elif execution_outcome == "single_turn_planned" and (
         had_report_fallback or had_main_fallback
     ):
         outcome = "language_review_unaccepted"
@@ -741,7 +715,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
     # Stage4B/4C may replace the original 4A report prose. Refresh reward
     # states using the FINAL reports actually delivered to Main; never train
     # on 4A-only snapshots which might disagree with final visible history.
-    if outcome in {"recovered", "single_turn_accepted"}:
+    if outcome == "single_turn_accepted":
         from .decision_reward_replay import replay_reward_states
         settings = audit.get("decision_reward_settings") or {}
         try:
@@ -765,9 +739,8 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
     )
     audit["language_evidence_issues"] = [failure] if failure else []
     audit["accepted_turns"] = (
-        len(turns) if outcome in {"recovered", "single_turn_accepted"} else 0
+        len(turns) if outcome == "single_turn_accepted" else 0
     )
     episode["outcome"] = outcome
-    episode["recovered"] = outcome == "recovered"
     return episode, (turns if outcome in {
-        "recovered", "single_turn_accepted"} else []), audit
+        "single_turn_accepted"} else []), audit

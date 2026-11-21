@@ -121,7 +121,7 @@ def _case_for_branch(
     )
     if recorded is not None and recorded != clean["clean_reference_id"]:
         raise ValueError("stage4_private_clean_identity_mismatch")
-    if published and journal.get("status") not in {"recovered", "single_turn_accepted"}:
+    if published and journal.get("status") != "single_turn_accepted":
         raise ValueError("stage4_published_case_not_accepted")
     if published and audit.get("parallel_batches_verified") is not True:
         raise ValueError("stage4_published_case_not_dependency_safe")
@@ -155,11 +155,7 @@ def _case_for_branch(
             "decision_accepted": published,
             # Single-turn publication validates the next decision only; it
             # never executes the pending Sub-Agent batch or proves recovery.
-            "globally_recovered": (published if journal.get("status") == "recovered"
-                                   else None),
-            "counterfactual_unrepaired": deepcopy(
-                audit.get("counterfactual_unrepaired")
-            ),
+            "globally_recovered": None,
             "observable_issues": deepcopy(
                 audit.get("observable_issue_snapshots") or []
             ),
@@ -172,9 +168,6 @@ def _case_for_branch(
             "invalidations": deepcopy(invalidations),
             "revalidations": deepcopy(
                 (audit.get("runtime") or {}).get("revalidations") or []
-            ),
-            "delayed_causal_audit": deepcopy(
-                audit.get("delayed_causal_audit")
             ),
         },
     }

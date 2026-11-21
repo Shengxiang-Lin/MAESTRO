@@ -54,8 +54,8 @@ Parquet. These are responsibilities of the individual `baseline/*` methods.
 
 Use the matching accepted Stage-1 Scenes, Stage-3 clean episodes and Main
 turns, and Stage-4 publication output. The exporter checks both generation
-manifests, clean-reference IDs, recovered Stage-4 publication state, case
-identity and exact Orchestra-o1 Main prompt reconstruction.
+manifests, clean-reference IDs, accepted single-turn Stage-4 publication state,
+case identity and exact Orchestra-o1 Main prompt reconstruction.
 
 ```bash
 python -m environment.data_export \
@@ -83,8 +83,8 @@ environment/data/unified/
 ```
 
 - `cases.jsonl`: one clean Case per accepted Scene plus reviewed Stage-4
-  fault Cases. Includes private paired Episode/fault/recovery provenance;
-  unrecovered/diagnostic cases never supply positive Main decisions.
+  fault Cases. Includes private frozen-reference and one-step fault provenance;
+  unobserved/rejected cases never supply positive Main decisions.
 - `decisions.jsonl`: one **accepted/published Main decision** per row, with
   unique `decision_id`, `scene_id`, `case_id`,
   `generation_mode`, exact `prompt` (a single O1 user message),
@@ -100,10 +100,10 @@ environment/data/unified/
 - `manifest.json`: frozen input/output hashes and counts. Baselines
   validate base-file hashes before transforming data.
 
-The base export retains all published positive Main decisions, including
-explicitly labeled fallback/template modes. Method-specific label eligibility
-is decided downstream; private unrecovered/dropped 4A candidates are not
-silently turned into positive decisions.
+The base export retains all accepted next-step Main decisions, including
+explicitly labeled template modes. Method-specific label eligibility
+is decided downstream; rejected and unobservable 4A candidates are never
+silently converted into positive decisions.
 
 Check a persisted base dataset:
 
@@ -153,10 +153,11 @@ This changes only the display, not the generated records or split policy.
 ## Single-turn publication semantics
 
 Current Stage 4 writes one reviewed Main next-decision per selected candidate,
-using journal status `single_turn_accepted`. This is **not** a completed
-recovery episode. The exporter accepts both old `recovered` records and the
-current single-turn status, setting `recovery.decision_accepted=true` for
-published Stage-4 cases. `recovery.globally_recovered` is `null` for
-single-turn cases: there is no future Sub-Agent execution to evaluate.
+using journal status `single_turn_accepted`. The current runtime and exporter
+do not accept old `recovered` episodes as new input. New Stage-4 Cases set
+`recovery.decision_accepted=true` and `recovery.globally_recovered=null`:
+there is no future Sub-Agent execution to evaluate. Existing archived unified
+datasets remain unchanged on disk; regenerate new data with this single-turn
+schema and a fresh output directory.
 Dataset preparation should use `decision_accepted` when testing publication
 eligibility rather than treating null global recovery as failure.
