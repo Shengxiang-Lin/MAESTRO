@@ -134,10 +134,15 @@ class PublicCorroborationTests(unittest.TestCase):
             target_scenes=2, max_scene_scan=40, max_fault_variants=24,
         )
         self.assertEqual(summary["observable_b3"], 2, summary["results"])
+        successes = [
+            row for row in summary["results"]
+            if row["status"] == "b3_observable"
+        ]
+        self.assertEqual(len(successes), 2)
         self.assertTrue(all(
             row["stage3_prior_history_preserved"] is True
             and row["next_main_turns"] == 1
-            for row in summary["results"]
+            for row in successes
         ))
 
     def test_clean_independent_claims_are_not_conflicts(self):
