@@ -30,7 +30,7 @@ from environment.untrusted_orchestration.orchestration.reasoning_fidelity import
 )
 from environment.untrusted_orchestration.inspection.visible_history import visible_history_reasoning_issues
 from environment.untrusted_orchestration.orchestration.main_decision_contract import (
-    build_main_decision_contract, critic_denies_confirmed_conflict, repeated_query_conflicts,
+    build_main_decision_contract, critic_denies_confirmed_conflict,
 )
 from .state_machine import Attempt
 from environment.untrusted_orchestration.inspection.visible_claim_state import audit_visible_claim_states
@@ -474,10 +474,6 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                 decision_contract = build_main_decision_contract(
                     entries, visible_goals, number_of_tasks=len(assignments),
                 )
-                history_conflicts = repeated_query_conflicts(
-                    tasks, latest, latest_rounds, latest_parent_versions,
-                )
-                decision_contract["visible_evidence"]["confirmed_repeated_query_conflicts"] = history_conflicts
                 author_system = _MAIN_DECISION_AUTHOR_SYSTEM
                 if any(goal.get("verification_focus") for goal in visible_goals):
                     author_system += (
@@ -487,14 +483,6 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                         " remain in the same Macro handoff, but are NOT"
                         " additional confirmed contradictions. Do not"
                         " claim either side of the dispute has been proved.\n"
-                    )
-                if history_conflicts:
-                    author_system += (
-                        "\nThe following already received reports describe the same "
-                        "delegated source query with the same prerequisite input versions. "
-                        "Their returned values still disagree. Explain the targeted check "
-                        "without treating a calculated downstream answer as verification:\n"
-                        + json.dumps(history_conflicts, ensure_ascii=False)
                     )
                 if any(goal["operation"] == "derive_from_returned_evidence"
                        for goal in visible_goals):
@@ -514,7 +502,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                             text, assignments, question=scene["question"],
                             visible_text=prompt + " " + json.dumps(
                                 assignments, ensure_ascii=False
-                            ) + " " + json.dumps(history_conflicts, ensure_ascii=False),
+                            ),
                         )
                         + visible_history_reasoning_issues(
                             text, decision_contract["prior_field_activity"])
