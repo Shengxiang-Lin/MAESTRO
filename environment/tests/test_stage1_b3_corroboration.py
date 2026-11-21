@@ -208,7 +208,7 @@ class PublicCorroborationTests(unittest.TestCase):
         ]}}
         alternatives = [
             _report_fault_payload(clean, sources, variant_index=i)
-            for i in range(4)
+            for i in range(2)
         ]
         self.assertEqual(
             {row["row_index"] for row in alternatives}, {0, 1},
@@ -219,7 +219,7 @@ class PublicCorroborationTests(unittest.TestCase):
             for row in alternatives
         ))
         self.assertIsNone(
-            _report_fault_payload(clean, sources, variant_index=4),
+            _report_fault_payload(clean, sources, variant_index=2),
         )
 
     def test_clean_independent_claims_are_not_conflicts(self):
