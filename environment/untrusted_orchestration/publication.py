@@ -101,8 +101,8 @@ def _publish(output: Path, planned: list[dict],
     retained_language_exceptions = 0
     local_candidates, local_qualified, local_rejections = [], [], []
     claim_state_supervision = []
-    # Observable evidence labels also exist in genuine non-recovered runs.
-    # They are never positive Main-action supervision.
+    # Observable evidence labels for rejected candidates are diagnostics,
+    # never positive supervised actions.
     reviewed_observable_states = []
     decision_reward_states = []
     decision_reward_missing = 0
@@ -119,12 +119,6 @@ def _publish(output: Path, planned: list[dict],
     invalidations_total = 0
     revalidations_total = 0
     late_conflicts_total = 0
-    recovered_after_actual_invalidation = 0
-    published_with_downstream_invalidation = 0
-    published_with_invalidation_and_visible_conflict = 0
-    published_recovered_historical_conflicts = 0
-    published_delayed_propagation_recoveries = 0
-    published_history_gap_distribution = Counter()
     for plan in planned:
         path = journals / f"{plan['index']:06d}.json"
         if not path.is_file():
@@ -139,7 +133,7 @@ def _publish(output: Path, planned: list[dict],
             for turn in data.get("turns", [])
         ]
         leaks = [row for row in leaks if row["issues"]]
-        if status in {"recovered", "single_turn_accepted"} and leaks:
+        if status == "single_turn_accepted" and leaks:
             status = "publication_generation_process_leak"
             publication_guard_rows.append({
                 "branch_index": plan["index"],
@@ -173,7 +167,7 @@ def _publish(output: Path, planned: list[dict],
         event_outcomes[plan["scenario_plan"]["blueprint"]][status] += 1
         for atom in plan["scenario_plan"]["fault_atoms"]:
             atom_outcomes[atom["kind"]][status] += 1
-        if status in {"recovered", "single_turn_accepted"} and (
+        if status == "single_turn_accepted" and (
             not isinstance(data.get("private_audit"), dict)
             or data["private_audit"].get("parallel_batches_verified") is not True
         ):
@@ -184,77 +178,46 @@ def _publish(output: Path, planned: list[dict],
         # final language/action review failed. Such Episodes are never
         # positive training data. Apply the SAME acceptance predicate to
         # public episodes and public Main turns.
-        if status in {"recovered", "single_turn_accepted"}:
-            if status == "single_turn_accepted":
-                private = data["private_audit"]
-                issues, conflicts = current_public_witness(
-                    private, plan["branch_round"]
+        if status == "single_turn_accepted":
+            private = data["private_audit"]
+            issues, conflicts = current_public_witness(
+                private, plan["branch_round"]
+            )
+            if not issues and not conflicts:
+                raise RuntimeError(
+                    "single_turn_accepted_without_current_public_witness"
                 )
-                if not issues and not conflicts:
-                    raise RuntimeError(
-                        "single_turn_accepted_without_current_public_witness"
-                    )
-                relation = evidence_relation(issues, conflicts)
-                realized = classify_observable_scenario(issues, conflicts)
-                target = plan.get("target_scenario")
-                if not realized["scenario_id"] or (
-                    target is not None and target != realized["scenario_id"]
-                ):
-                    raise RuntimeError(
-                        "stage4_published_target_scenario_lacks_public_witness"
-                    )
-                published_scenario_families[realized["scenario_family"]] += 1
-                published_scenario_types[realized["scenario_id"]] += 1
-                pattern, operations, parallel_tasks = coordination_pattern(
-                    private.get("evidence_plan") or []
+            relation = evidence_relation(issues, conflicts)
+            realized = classify_observable_scenario(issues, conflicts)
+            target = plan.get("target_scenario")
+            if not realized["scenario_id"] or (
+                target is not None and target != realized["scenario_id"]
+            ):
+                raise RuntimeError(
+                    "stage4_published_target_scenario_lacks_public_witness"
                 )
-                published_single_turn_relations[relation] += 1
-                published_single_turn_patterns[pattern] += 1
-                published_single_turn_parallel[
-                    "parallel" if parallel_tasks > 1 else "single"
-                ] += 1
-                published_single_turn_prefix_preserved[
-                    "preserved" if private.get(
-                        "stage3_prior_history_preserved") is True else
-                    "unverified_legacy"
-                ] += 1
-                published_single_turn_conflict_kinds.update(
-                    event.get("kind", "unknown") for event in conflicts
-                )
+            published_scenario_families[realized["scenario_family"]] += 1
+            published_scenario_types[realized["scenario_id"]] += 1
+            pattern, operations, parallel_tasks = coordination_pattern(
+                private.get("evidence_plan") or []
+            )
+            published_single_turn_relations[relation] += 1
+            published_single_turn_patterns[pattern] += 1
+            published_single_turn_parallel[
+                "parallel" if parallel_tasks > 1 else "single"
+            ] += 1
+            published_single_turn_prefix_preserved[
+                "preserved" if private.get(
+                    "stage3_prior_history_preserved") is True else
+                "unverified_legacy"
+            ] += 1
+            published_single_turn_conflict_kinds.update(
+                event.get("kind", "unknown") for event in conflicts
+            )
             if not isinstance(data.get("episode"), dict):
                 raise RuntimeError(
                     "untrusted_recovered_branch_missing_public_episode"
                 )
-            history_events = [
-                event for event in (
-                    (data["private_audit"].get("runtime") or {})
-                    .get("detected_conflicts") or []
-                )
-                if event.get("kind") == "cross_round_report_disagreement"
-                or (event.get("kind") == "explicit_independent_claim_disagreement"
-                    and event.get("conflict_timing") == "delayed")
-            ]
-            if history_events and status == "recovered":
-                published_recovered_historical_conflicts += 1
-                gaps = {
-                    event["latest_round"] - event["older_round"]
-                    for event in history_events
-                    if type(event.get("older_round")) is int
-                    and type(event.get("latest_round")) is int
-                    and 0 < event["older_round"] < event["latest_round"]
-                }
-                published_history_gap_distribution.update(gaps)
-            causal = data["private_audit"].get("delayed_causal_audit")
-            if causal is not None and status == "recovered":
-                if (not causal["observable_conflict"]
-                        or not causal["impacted_consumers"]
-                        or not causal["invalidated_consumers"]
-                        or not set(causal["invalidated_consumers"]) <=
-                               set(causal["recomputed_consumers"])):
-                    raise RuntimeError(
-                        "delayed_propagation_lacks_verified_recompute"
-                    )
-                published_delayed_propagation_recoveries += 1
             public_episode = deepcopy(data["episode"])
             # Truth labels belong in private audit, never public reviewed-turn.
             public_episode.pop("outcome", None)
@@ -278,8 +241,8 @@ def _publish(output: Path, planned: list[dict],
                 })
                 snapshot = state_by_round.get(turn["round"])
                 if snapshot is None:
-                    # Legacy journals have no pre-action snapshot: never
-                    # invent a choice set from the teacher action alone.
+                    # A missing decision-time snapshot is not reconstructed
+                    # from an accepted action alone.
                     decision_reward_missing += 1
                 else:
                     decision_reward_states.append({
@@ -303,8 +266,8 @@ def _publish(output: Path, planned: list[dict],
             audit = data["private_audit"]
             audits.append(audit)
             # Keep every observational state in private diagnostics, but
-            # expose the standalone training-side state labels ONLY when
-            # this exact Episode passed global recovery and review.
+            # release training-side state labels only after this current
+            # next-decision episode passed contract and language review.
             claim_audit = audit.get("visible_claim_state") or {}
             for snapshot in claim_audit.get("rounds", []):
                 state_label = {
@@ -335,18 +298,17 @@ def _publish(output: Path, planned: list[dict],
                     claim_state_diagnostics.append({
                         **state_label, "global_publication_status": status,
                     })
-                if (status in {"recovered", "single_turn_accepted"} or (
+                if (status == "single_turn_accepted" or (
                     status != "not_selected_for_language_review"
                     and audit.get("language_review_accepted") is True
                 )):
                     reviewed_observable_states.append({
                         **state_label,
                         "global_outcome_private": status,
-                        "positive_main_action_label": status in {
-                            "recovered", "single_turn_accepted"},
+                        "positive_main_action_label": status == "single_turn_accepted",
                         "label_scope": "observable_claim_state_only",
                     })
-                if status in {"recovered", "single_turn_accepted"}:
+                if status == "single_turn_accepted":
                     claim_state_supervision.append(state_label)
                     claim_state_statuses.update(
                         node["status"] for node in
@@ -360,19 +322,8 @@ def _publish(output: Path, planned: list[dict],
             invalidations = runtime.get("invalidations", [])
             conflicts = runtime.get("detected_conflicts", [])
             invalidations_total += len(invalidations)
-            if status == "recovered" and invalidations:
-                # Count only globally recovered and language-reviewed
-                # published branches, never 4A-only simulated candidates.
-                published_with_downstream_invalidation += 1
-                published_with_invalidation_and_visible_conflict += bool(
-                    conflicts
-                )
             revalidations_total += len(runtime.get("revalidations", []))
             late_conflicts_total += len(conflicts)
-            recovered_after_actual_invalidation += (
-                bool(invalidations) and bool(conflicts)
-                and audit.get("execution_outcome") == "recovered"
-            )
             event_timeline_rows.append({
                 "round_sample_id": plan["sample_id"],
                 "scenario_blueprint": plan["scenario_plan"]["blueprint"],
@@ -500,8 +451,7 @@ def _publish(output: Path, planned: list[dict],
                 for item in audit.get("main_action_reviews", [])
             }
             for turn in audit.get("candidate_local_turns", []):
-                # This is a *diagnostic* per-decision label, not a
-                # counterfactual guarantee about the final global answer.
+                # Diagnostic per-decision label, not a future outcome guarantee.
                 # Only currently visible previous reports can influence the
                 # decision's local review eligibility.
                 history_reports = [
@@ -534,7 +484,7 @@ def _publish(output: Path, planned: list[dict],
                     "local_main_action_review_passed": main_accepted,
                     "dependency_safe": dependency_safe,
                     "locally_qualified": locally_qualified,
-                    "globally_recovered": status == "recovered",
+                    "decision_accepted": status == "single_turn_accepted",
                     "terminal_execution_outcome": audit.get(
                         "execution_outcome"
                     ),
@@ -583,17 +533,7 @@ def _publish(output: Path, planned: list[dict],
                   local_qualified)
     return {
         "completed_branches": sum(counters.values()),
-        "recovered": counters["recovered"],
         "single_turn_accepted": counters["single_turn_accepted"],
-        "incorrect": counters["incorrect_result_after_actual_propagation"],
-        "unresolved": sum(count for status, count in counters.items()
-                          if status not in {
-                              "recovered", "single_turn_accepted",
-                              "skipped_unsupported",
-                              "rejected_validation",
-                              "incorrect_result_after_actual_propagation",
-                              "not_selected_for_language_review",
-                          }),
         "skipped_or_rejected": (
             counters["skipped_unsupported"] +
             counters["rejected_validation"]
@@ -631,21 +571,8 @@ def _publish(output: Path, planned: list[dict],
         "local_decisions_reviewed": len(local_candidates),
         "local_decisions_qualified_diagnostic": len(local_qualified),
         "local_decisions_rejected_diagnostic": len(local_rejections),
-        "local_qualified_from_non_recovered_branches": sum(
-            item["locally_qualified"] and not item["globally_recovered"]
-            for item in local_candidates
-        ),
         "local_decision_review_file": str(
             output / "private" / "main_turns_local_review.jsonl"
-        ),
-        "execution_recovered_branches": execution_outcomes["recovered"],
-        "execution_incorrect_branches":
-            execution_outcomes["incorrect_result_after_actual_propagation"],
-        "execution_unresolved_branches": sum(
-            count for outcome, count in execution_outcomes.items()
-            if outcome not in {
-                "recovered", "incorrect_result_after_actual_propagation",
-            }
         ),
         "publication_rejected_by_language_or_action": (
             counters["language_review_unaccepted"]
@@ -667,18 +594,6 @@ def _publish(output: Path, planned: list[dict],
         "actual_downstream_invalidations": invalidations_total,
         "verified_without_downstream_invalidation": revalidations_total,
         "visible_late_conflicts_detected": late_conflicts_total,
-        "execution_recovered_after_invalidation":
-            recovered_after_actual_invalidation,
-        "published_with_downstream_invalidation":
-            published_with_downstream_invalidation,
-        "published_with_invalidation_and_visible_conflict":
-            published_with_invalidation_and_visible_conflict,
-        "published_recovered_historical_conflicts":
-            published_recovered_historical_conflicts,
-        "published_delayed_propagation_recoveries":
-            published_delayed_propagation_recoveries,
-        "published_historical_conflict_round_gap_distribution":
-            dict(sorted(published_history_gap_distribution.items())),
         "event_timeline_diagnostics": str(
             output / "private" / "event_timeline.jsonl"
         ),
@@ -695,9 +610,6 @@ def _publish(output: Path, planned: list[dict],
         "wrong_visibility_diagnostics": str(
             output / "private" / "wrong_visibility.jsonl"
         ),
-        "language_review_rejected_after_recovery":
-            sum(1 for audit in audits if audit.get("execution_recovered")
-                and not audit.get("language_review_accepted", True)),
         "outcomes": dict(counters),
         "fault_mode_outcomes": {
             mode: dict(counts)
@@ -725,7 +637,7 @@ def _publish(output: Path, planned: list[dict],
         "subagent_review_failure_stages": dict(report_review_failures),
         "claim_state_supervision_rounds": len(claim_state_supervision),
         "reviewed_observable_state_rounds": len(reviewed_observable_states),
-        "reviewed_nonrecovered_state_rounds": sum(
+        "reviewed_nonaccepted_state_rounds": sum(
             not row["positive_main_action_label"]
             for row in reviewed_observable_states
         ),
