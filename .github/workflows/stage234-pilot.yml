@@ -27,7 +27,7 @@ jobs:
       - name: Run four-scene Stage 2-4 paired offline pilot
         run: |
           python -m environment.tests.stage234_pilot \
-            --count 4 --feedback-rounds 2 --max-candidates 12 \
+            --count 4 --feedback-rounds 2 \
             --output-dir environment/data/stage234_smoke_ci
       - name: Upload pilot diagnostics and a few example trajectories
         if: always()

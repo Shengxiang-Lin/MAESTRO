@@ -43,7 +43,7 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def run_pilot(output_dir: Path, *, count: int = 4,
-              feedback_rounds: int = 2, max_candidates: int = 12) -> dict:
+              feedback_rounds: int = 2) -> dict:
     if count not in range(1, len(CASES) + 1):
         raise ValueError("stage234_pilot_scene_count_out_of_range")
     if feedback_rounds not in range(1, 5):
@@ -197,11 +197,9 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--count", type=int, default=4)
     parser.add_argument("--feedback-rounds", type=int, default=2)
-    parser.add_argument("--max-candidates", type=int, default=12)
     args = parser.parse_args()
     run_pilot(args.output_dir, count=args.count,
-              feedback_rounds=args.feedback_rounds,
-              max_candidates=args.max_candidates)
+              feedback_rounds=args.feedback_rounds)
 
 
 if __name__ == "__main__":
