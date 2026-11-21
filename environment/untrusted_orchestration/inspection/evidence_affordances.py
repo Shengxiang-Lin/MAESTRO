@@ -142,6 +142,17 @@ def analyze_scene_evidence_affordances(scene: dict) -> dict:
         if not common:
             continue
         fusion = is_common_join_consumer(left, right)
+        # The two independently source-scoped directory Macros each
+        # deliver a candidate's route_key -> entity_0 mapping. They are
+        # comparable even when a *later* verifier joins their rows.
+        # This is structural potential only: actual subject/scope equality
+        # must still be witnessed in delivered Stage-2/3 claims.
+        sibling_reference_claims = (
+            {"route_key", "entity_0"} <= set(common)
+            and all(len(task["source_ids"]) == 1
+                    and task.get("macro_role") == "association"
+                    for task in (a, b))
+        )
         first, later = sorted((left, right), key=lambda tid: waves[tid])
         # This is a *structural potential*, not a claim that the later
         # source actually contradicts the earlier report.
@@ -158,8 +169,9 @@ def analyze_scene_evidence_affordances(scene: dict) -> dict:
             "shared_output_fields": common,
             "shared_identifier_fields": sorted(set(common) & _ID_FIELDS),
             "relationship": (
-                "complementary_fusion" if fusion
-                else "potential_same_field_cross_check"
+                "potential_same_field_cross_check"
+                if sibling_reference_claims or not fusion
+                else "complementary_fusion"
             ),
             "reported_in_same_reference_wave": (
                 waves[left] == waves[right]

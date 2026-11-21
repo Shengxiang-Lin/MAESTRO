@@ -205,23 +205,29 @@ def compose_evidence_plan(*, seed: int, ordinal: int, difficulty: str,
                     "Resolve the eligible event's subject",
                 )
             else:
-                # A Sub-Agent can reconcile two short directory sources in
-                # one coherent investigation WorkProduct. Preserve a
-                # separate Main-visible verification gate so the model
-                # must decide to dispatch it after candidate discovery.
-                # This coarsening keeps verification compatible with
-                # typed Goals and the overall Macro budget.
-                association = add(
-                    "association", "reconcile_directories", [project],
-                    {"entity_0": "str"}, ["link_a", "link_b"],
-                    "Reconcile independently observed reference candidates",
-                )
+                # Each directory provides a genuinely separate source
+                # observation about the same route-to-entity association.
+                # Deliver these claims in two sibling Macros; the existing
+                # necessary verification combines their candidate intersection
+                # with event eligibility and the independent relationship.
+                # Do not coarsen the two observations into one opaque report:
+                # Main must be able to compare their own cited claims.
+                references = [
+                    add(
+                        "association", "read_reference_candidates", [project],
+                        {"route_key": "str", "entity_0": "str"}, [sid],
+                        "Retrieve the " + sid + " candidate route mappings "
+                        "for the identified project",
+                    )
+                    for sid in ("link_a", "link_b")
+                ]
                 produced[port] = add(
                     "verification", "verify_real_fork",
-                    [project, association], {"entity_0": "str"},
+                    [project, *references], {"entity_0": "str"},
                     ["event_ledger", "real_fork"],
-                    "Verify the candidate against event eligibility and an "
-                    "independent relationship source",
+                    "Intersect independently sourced route mappings and "
+                    "verify the candidate against event eligibility and "
+                    "an independent relationship source",
                 )
         else:
             raise ValueError("unsupported_information_need:" + port)
