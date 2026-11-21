@@ -570,6 +570,35 @@ class ExecutionState:
                     )
         return None
 
+    def _visible_filter_issue(self, task_id: str) -> str | None:
+        """Compare two current Main-visible reports of completed work.
+
+        The Sub-Agent summary contains the exact candidate set observed at
+        each executed filter, while Result contains final delivered cases.
+        This never reads private executor steps, the clean result, or Gold.
+        """
+        task = self.tasks[task_id]
+        if (task.get("macro_role") != "discovery"
+                or task.get("outputs", {}).get("typed_relation") != ["case_id"]
+                or not any(step["op"] in {"filter_eq", "filter_gte"}
+                           for step in task["operator_chain"])):
+            return None
+        report = self.public_reports.get(task_id) or {}
+        delivered = self._public_result_rows(report)
+        if (delivered is None or not all(
+                isinstance(row.get("case_id"), str) for row in delivered
+        )):
+            return None
+        finish = report.get("finish_result") or {}
+        public_text = " ".join((
+            str(finish.get("summary") or ""),
+            str(report.get("trace_summary") or ""),
+        ))
+        from .reporting.work_evidence import visible_filter_discrepancy
+        return visible_filter_discrepancy(
+            public_text, {row["case_id"] for row in delivered},
+        )
+
     def _visible_arithmetic_issue(self, task_id: str) -> str | None:
         """Check one source-free derivation against explicitly delivered inputs.
 
@@ -729,24 +758,9 @@ class ExecutionState:
         issue = visible_work_discrepancy(work_text)
         if issue:
             return issue
-        # Only a discovery handoff whose output remains case identifiers can
-        # compare a complete reported filter set with its delivered Result.
-        # This intentionally does NOT infer that a case satisfies a hidden
-        # World predicate merely because its identifier was returned.
-        if (task.get("macro_role") == "discovery"
-                and task.get("outputs", {}).get("typed_relation") == ["case_id"]
-                and any(step["op"] in {"filter_eq", "filter_gte"}
-                        for step in task["operator_chain"])):
-            delivered = self._public_result_rows(self.public_reports[task_id])
-            if (delivered is not None and all(
-                    isinstance(row.get("case_id"), str) for row in delivered
-            )):
-                from .reporting.work_evidence import visible_filter_discrepancy
-                filter_issue = visible_filter_discrepancy(
-                    work_text, {row["case_id"] for row in delivered},
-                )
-                if filter_issue:
-                    return filter_issue
+        filter_issue = self._visible_filter_issue(task_id)
+        if filter_issue:
+            return filter_issue
         arithmetic_issue = self._visible_arithmetic_issue(task_id)
         if arithmetic_issue:
             return arithmetic_issue
@@ -1238,6 +1252,9 @@ class ExecutionState:
             elif self._visible_scope_issue(tid):
                 kind = "scope_constraint_mismatch"
                 reason = self._visible_scope_issue(tid)
+            elif self._visible_filter_issue(tid):
+                kind = "scope_constraint_mismatch"
+                reason = self._visible_filter_issue(tid)
             elif self._visible_lookup_issue(tid):
                 kind = "lookup_key_disagreement"
                 reason = self._visible_lookup_issue(tid)
