@@ -47,6 +47,28 @@ class SingleTurnBranchTests(unittest.TestCase):
         self.assertEqual(current["result"]["subtask_results"], [])
         self.assertNotIn("recovered", episode)
 
+    def test_real_discovery_retrieval_fault_has_public_filter_witness(self):
+        # The sampled frozen discovery task executes two full case-id
+        # filters before projecting their intersection to the final Result.
+        # A wrong case delivered after those filters is now publicly
+        # checkable from the attempted filter outputs, not hidden Gold.
+        task = self.scene["macro_graph"]["reference_waves"][0][0]
+        self.assertEqual(
+            next(x for x in self.scene["macro_graph"]["tasks"]
+                 if x["task_id"] == task)["macro_role"], "discovery",
+        )
+        _, _, audit = build_branch(
+            self.scene, self.reports, self.clean, branch_round=2,
+            faults=[Fault(task, "wrong",
+                          atom_kind="wrong_retrieval", variant_index=0)],
+        )
+        self.assertEqual(audit["outcome"], "single_turn_planned")
+        self.assertTrue(any(
+            issue.get("kind") == "scope_constraint_mismatch"
+            for snapshot in audit.get("observable_issue_snapshots", [])
+            for issue in snapshot.get("issues", [])
+        ))
+
     def test_original_prior_clean_dispatches_and_reports_are_unchanged(self):
         target = self.scene["macro_graph"]["reference_waves"][1][0]
         episode, _, audit = build_branch(
