@@ -1491,6 +1491,6 @@ def generate_turns(
             + (f"| accepted branches={summary['single_turn_accepted']} "
                if decision_unit == "single_turn"
                else f"| reviewed branches={summary['recovered']} ")
-            f"| reviewed turns={summary['main_training_turns']}"
+            + f"| reviewed turns={summary['main_training_turns']}"
         )
     return summary
