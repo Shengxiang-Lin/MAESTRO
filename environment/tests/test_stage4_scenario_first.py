@@ -200,6 +200,24 @@ class ScenarioSelectionTests(unittest.TestCase):
                 target_main_turns=2, workers=1, no_progress=True,
             )
             self.assertEqual(summary["selection_strategy"], "scenario_first")
+            # Never replace observable screening reasons with the legacy
+            # multi-round "not_execution_recovered" label.
+            selection = [
+                json.loads(line) for line in
+                (out / "private/candidate_selection.jsonl").read_text().splitlines()
+            ]
+            self.assertTrue(selection)
+            self.assertEqual(
+                sum(summary["candidate_screening_outcomes"].values()),
+                len(selection),
+            )
+            self.assertTrue(all(
+                row["selection_reason"] not in {
+                    "not_execution_recovered", "language_review_primary",
+                }
+                and "language_review_selection_reason" in row
+                for row in selection
+            ))
             self.assertEqual(sum(summary["published_scenario_types"].values()),
                              summary["single_turn_accepted"])
             self.assertEqual(sum(summary["published_scenario_families"].values()),

@@ -56,3 +56,19 @@ contract, no leakage of private labels and frozen Stage 3 history.
 
 Legacy recovery-episode support is retained strictly for older callers;
 it is not part of the current single-turn dataset.
+
+## Selection diagnostics (single-turn)
+
+`private/candidate_selection.jsonl` has two separate decisions:
+
+- `selection_reason`: immutable Stage-4A visibility, legality, novelty and
+  scenario-budget classification (`target_scenario_not_publicly_realized`,
+  `duplicate_public_issue_and_action`, `single_turn_budget_reserve`,
+  `balanced_public_scenario_and_action`).
+- `language_review_selection_reason`: whether the candidate entered 4B/4C
+  as a primary or backfill attempt. An unselected candidate is **not** a
+  failed recovery: no future recovery episode is executed.
+
+`summary.json.candidate_screening_outcomes` partitions all trials into
+`selected`, `no_public_witness`, `duplicate`, and `budget_reserve`.
+Use this instead of the old `not_execution_recovered` label.
