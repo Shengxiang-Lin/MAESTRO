@@ -19,6 +19,7 @@ from environment.implement_subtask.reporting import code_owned_result
 from environment.base_orchestration.trajectory_builder import build_episode
 from environment.untrusted_orchestration.generate_turns import generate_turns
 from environment.data_export.export import export_dataset
+from environment.data_export.source_io import digest
 
 
 CASES = ((0, "medium"), (1, "hard"), (2, "medium"), (3, "hard"))
@@ -97,6 +98,19 @@ def run_pilot(output_dir: Path, *, count: int = 4,
     _write_jsonl(output_dir / "stage2" / "subtasks.jsonl", reports)
     _write_jsonl(output_dir / "stage3" / "episodes.jsonl", episodes)
     _write_jsonl(output_dir / "stage3" / "main_turns.jsonl", turns)
+    # These frozen offline fixtures are generated directly through
+    # build_episode rather than the Stage-3 CLI. Supply the matching
+    # source manifest required by the canonical exporter, including
+    # its scene digest and exact O1 prompt settings.
+    (output_dir / "stage3" / "manifest.json").write_text(
+        json.dumps({
+            "scenes_sha256": digest(output_dir / "scenes.jsonl"),
+            "max_attempts": 16,
+            "sub_model": "qwen3-8b",
+            "model_alias": "model_1",
+        }, sort_keys=True),
+        encoding="utf-8",
+    )
 
     stage4 = generate_turns(
         scenes_path=output_dir / "scenes.jsonl",
