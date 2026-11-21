@@ -103,10 +103,12 @@ def run_pilot(output_dir: Path, *, count: int = 4,
         clean_episodes_path=output_dir / "stage3" / "episodes.jsonl",
         output_dir=output_dir / "stage4",
         max_scenes=count, branches_per_scene=feedback_rounds,
-        seed=17, scenario_mode="event_driven",
+        seed=17, decision_unit="single_turn", scenario_mode="event_driven",
         atomic_fault_kinds=list(FAULTS),
         candidate_strategy="enumerate",
-        max_candidates_per_round=max_candidates,
+        # Exhaust feasible scenario targets in 4A; the smoke's expensive
+        # language work is still bounded by one selected candidate per wave.
+        max_candidates_per_round=None,
         max_distractors_per_fault=1,
         max_selected_per_round=1,
         max_language_attempts_per_round=1,
@@ -139,6 +141,15 @@ def run_pilot(output_dir: Path, *, count: int = 4,
     if any(e.get("clean_reference_id") != known[e["task_id"]]
            for e in public):
         raise RuntimeError("stage234_pilot_public_episode_reference_mismatch")
+    if (stage4["decision_unit"] != "single_turn"
+            or not public
+            or len(public) != stage4["single_turn_accepted"]
+            or any(e.get("format") != "maestro_untrusted_single_turn.v1"
+                   for e in public)
+            or stage4["published_single_turn_stage3_prior_history"].get(
+                "preserved", 0
+            ) != len(public)):
+        raise RuntimeError("stage234_pilot_single_turn_contract_failed")
 
     summary = {
         "mode": "offline_deterministic_no_llm",
@@ -147,7 +158,12 @@ def run_pilot(output_dir: Path, *, count: int = 4,
         "clean_episode_count": len(episodes),
         "clean_turn_count": len(turns),
         "clean_references_verified": len(prefix_checks),
+        "decision_unit": stage4["decision_unit"],
         "fault_trials": stage4["candidate_trials"],
+        "published_scenario_types": stage4.get("published_scenario_types", {}),
+        "candidate_screening_outcomes": stage4.get(
+            "candidate_screening_outcomes", {}
+        ),
         "fault_feedback_rounds": stage4["rounds_extracted_from_base"],
         "paired_index_rows": len(pairs),
         "fault_kinds_planned": stage4.get("atomic_fault_kinds_planned", {}),
