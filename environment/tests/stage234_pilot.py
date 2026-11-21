@@ -18,6 +18,7 @@ from environment.implement_subtask.realize import realize_scene
 from environment.implement_subtask.reporting import code_owned_result
 from environment.base_orchestration.trajectory_builder import build_episode
 from environment.untrusted_orchestration.generate_turns import generate_turns
+from environment.data_export.export import export_dataset
 
 
 CASES = ((0, "medium"), (1, "hard"), (2, "medium"), (3, "hard"))
@@ -151,6 +152,18 @@ def run_pilot(output_dir: Path, *, count: int = 4,
             ) != len(public)):
         raise RuntimeError("stage234_pilot_single_turn_contract_failed")
 
+    unified = export_dataset(
+        scenes_path=output_dir / "scenes.jsonl",
+        clean_episodes_path=output_dir / "stage3" / "episodes.jsonl",
+        clean_turns_path=output_dir / "stage3" / "main_turns.jsonl",
+        stage4_dir=output_dir / "stage4",
+        output_dir=output_dir / "unified",
+        overwrite=True,
+    )
+    if (unified["accepted_fault_cases"] != len(public)
+            or unified["decision_sources"].get("untrusted") != len(public)):
+        raise RuntimeError("stage234_pilot_single_turn_export_mismatch")
+
     summary = {
         "mode": "offline_deterministic_no_llm",
         "scene_count": len(scenes),
@@ -159,6 +172,8 @@ def run_pilot(output_dir: Path, *, count: int = 4,
         "clean_turn_count": len(turns),
         "clean_references_verified": len(prefix_checks),
         "decision_unit": stage4["decision_unit"],
+        "unified_export_decisions": unified["decision_count"],
+        "unified_export_accepted_fault_cases": unified["accepted_fault_cases"],
         "fault_trials": stage4["candidate_trials"],
         "published_scenario_types": stage4.get("published_scenario_types", {}),
         "candidate_screening_outcomes": stage4.get(
