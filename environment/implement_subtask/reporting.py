@@ -1054,8 +1054,25 @@ def author_critic_report(
                     witnessed_source_summary(teacher_record)
                     if teacher_record.get("evidence_trust_version") else ""
                 )
+                # For independently corroborated reference Macros the
+                # route -> entity mapping must be independently observable
+                # by Main. Free-form LLM answers can preserve every literal
+                # while still losing record boundaries and source citations.
+                # Publish the EXACT code-owned, cited rows after the Author
+                # and Critic pass; the LLM still authors Summary and trace.
+                # Upstream project references remain contextual provenance,
+                # not additional votes for the local directory observation.
+                cite_reference_claims = (
+                    set(teacher_record.get("output_schema", []))
+                    == {"route_key", "entity_0"}
+                    and teacher_record.get("authorized_source_ids")
+                    in (["link_a"], ["link_b"])
+                )
                 row["finish_result"] = {
-                    "result": normalized_result,
+                    "result": (
+                        frozen_result if cite_reference_claims
+                        else normalized_result
+                    ),
                     "status": "done",
                     "summary": (
                         summary_text + " " + witnessed
@@ -1064,7 +1081,10 @@ def author_critic_report(
                 }
                 row["report_authoring"] = {
                     "status": "accepted",
-                    "public_result_format": "natural_answer",
+                    "public_result_format": (
+                        "typed_cited_result" if cite_reference_claims
+                        else "natural_answer"
+                    ),
                     "oracle_result_immutable": True,
                     "ignored_model_result": ignored_model_result,
                     "verified_structured_answer_rendered": structured_answer_coerced,
