@@ -28,7 +28,7 @@ class SingleTurnBranchTests(unittest.TestCase):
         task = self.scene["macro_graph"]["reference_waves"][0][0]
         episode, turns, audit = build_branch(
             self.scene, self.reports, self.clean, branch_round=2,
-            faults=[Fault(task, "missing")], single_turn=True,
+            faults=[Fault(task, "missing")],
         )
         self.assertEqual(audit["outcome"], "single_turn_planned")
         self.assertEqual(audit["decision_unit"], "single_turn")
@@ -49,7 +49,7 @@ class SingleTurnBranchTests(unittest.TestCase):
         target = self.scene["macro_graph"]["reference_waves"][1][0]
         episode, _, audit = build_branch(
             self.scene, self.reports, self.clean, branch_round=3,
-            faults=[Fault(target, "missing")], single_turn=True,
+            faults=[Fault(target, "missing")],
         )
         self.assertTrue(audit["stage3_prior_history_preserved"])
         assert episode["trajectory"]
@@ -67,7 +67,7 @@ class SingleTurnBranchTests(unittest.TestCase):
         task = self.scene["macro_graph"]["reference_waves"][0][0]
         episode, _, audit = build_branch(
             self.scene, self.reports, self.clean, branch_round=2,
-            faults=[Fault(task, "missing")], single_turn=True,
+            faults=[Fault(task, "missing")],
         )
         authored_episode, authored_audit = author_branch_reports(
             self.scene, self.reports, episode, audit,
@@ -98,7 +98,6 @@ class SingleTurnBranchTests(unittest.TestCase):
                 clean_episodes_path=clean, output_dir=output,
                 max_scenes=1, branches_per_scene=1,
                 decision_unit="single_turn",
-                scenario_mode="event_driven", candidate_strategy="enumerate",
                 atomic_fault_kinds=["no_result", "result_summary_conflict"],
                 max_candidates_per_round=2, max_distractors_per_fault=1,
                 target_main_turns=2, workers=1, no_progress=True,
