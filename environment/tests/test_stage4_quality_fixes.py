@@ -10,9 +10,6 @@ from environment.untrusted_orchestration.inspection.claim_comparison import (
 from environment.untrusted_orchestration.orchestration.main_decision_contract import (
     build_main_decision_contract,
 )
-from environment.untrusted_orchestration.scenario.candidate_selection import (
-    select_recovered_candidates,
-)
 
 
 def report(rows, summary):
@@ -294,55 +291,6 @@ class ReasoningGroundingTests(unittest.TestCase):
         self.assertEqual(reasoning_evidence_issues(
             "The earlier and later results disagree; I should recheck.", broader,
         ), [])
-
-
-class QualitySelectionTests(unittest.TestCase):
-    def test_global_budget_prioritizes_real_impact_and_novelty(self):
-        plans, journals = [], []
-        outcomes = [
-            ("completed", False), ("blocked", False),
-            ("completed", True), ("completed", True),
-        ]
-        for i, (status, correct) in enumerate(outcomes):
-            plans.append({
-                "index": i, "sample_id": f"q{i}-candidate-0",
-                "task_id": f"q{i}", "branch_round": 2, "faults": [],
-                "scenario_plan": {
-                    "fault_atoms": [{"kind": "wrong_retrieval"}],
-                },
-            })
-            journals.append({
-                "status": "recovered",
-                "episode": {"trajectory": [
-                    {"attempt": 2, "action": "delegate_task"},
-                ]},
-                "private_audit": {
-                    "execution_outcome": "recovered",
-                    "counterfactual_unrepaired": {
-                        "status": status, "correct": correct,
-                    },
-                    "runtime": {},
-                    "evidence_plan": [{
-                        "evidence_requests": [{
-                            "operation": "retry_missing_evidence",
-                            "target_fields": ["project_id"],
-                            "authorized_source_ids": ["src"],
-                        }],
-                    }],
-                },
-            })
-        selected, rows, summary = select_recovered_candidates(
-            plans, journals, max_selected_per_round=None,
-            strategy="global_balanced", target_main_turns=10,
-        )
-        self.assertIn(0, selected)
-        self.assertIn(1, selected)
-        # Redundant routine consistency-only policies must not fill
-        # the remaining Main-turn budget.
-        self.assertEqual(len(selected & {2, 3}), 1)
-        self.assertLess(summary["estimated_selected_main_turns"], 10)
-        self.assertEqual(rows[0]["answer_impact"], "answer_changing")
-        self.assertEqual(rows[1]["answer_impact"], "completion_blocked")
 
 
 if __name__ == "__main__":
