@@ -220,7 +220,6 @@ def _plan_branches(
 def generate_turns(
     *, scenes_path: Path, reports_path: Path, output_dir: Path,
     max_scenes: int | None = 30, branches_per_scene: int | None = None,
-    decision_unit: str = "single_turn",
     round_sampling_strategy: str = "chronological",
     seed: int = 17,
     max_rounds: int = 16, max_cost: int = 80, max_retries: int = 1,
@@ -281,8 +280,6 @@ def generate_turns(
     } or any(output.resolve() == p.parent.resolve() for p in paths):
         raise ValueError("untrusted_output_overwrites_input")
 
-    if decision_unit != "single_turn":
-        raise ValueError("untrusted_invalid_decision_unit")
     for name, value, maximum in (
         ("max_candidates_per_round", max_candidates_per_round, 128),
         ("max_distractors_per_fault", max_distractors_per_fault, 10),
@@ -306,7 +303,7 @@ def generate_turns(
             or len(kinds) != len(set(kinds))):
         raise ValueError("invalid_atomic_fault_kinds")
     settings = {
-        "decision_unit": decision_unit,
+        "decision_unit": "single_turn",
         "max_scenes": max_scenes,
         "branches_per_scene": branches_per_scene,
         "round_sampling_strategy": round_sampling_strategy,
@@ -1091,7 +1088,7 @@ def generate_turns(
             else "partial"
         ),
         "publication_status": "filtered_by_visibility_or_language_review",
-        "decision_unit": decision_unit,
+        "decision_unit": "single_turn",
         "pipeline": "maestro_untrusted_orchestration",
         "scenario_mode": "event_driven",
         "candidate_strategy": "enumerate",

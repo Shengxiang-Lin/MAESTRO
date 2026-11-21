@@ -70,7 +70,7 @@ class CanonicalStagePathsTests(TestCase):
         self.assertEqual(stage4["max_scenes"], 10)
         self.assertIsNone(stage4["branches_per_scene"])
         self.assertEqual(stage4["round_sampling_strategy"], "chronological")
-        self.assertEqual(stage4["decision_unit"], "single_turn")
+        self.assertNotIn("decision_unit", stage4)
         self.assertNotIn("max_post_fork_rounds", stage4)
         self.assertTrue(main["freeze_dispatch"])
         self.assertNotIn("max_fault_atoms", stage4)

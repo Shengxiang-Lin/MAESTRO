@@ -54,8 +54,9 @@ Use a new output directory because code signatures differ. Confirm
 published A/B1/B2/B3 counts, review acceptance, single-turn output
 contract, no leakage of private labels and frozen Stage 3 history.
 
-The maintained Stage-4 runner is now exclusively `single_turn`:
-`recovery_episode`, future-event scheduling, historical report augmentation,
+The maintained Stage-4 runner is now exclusively `single_turn`; there
+is no `decision_unit` switch. `recovery_episode`, future-event scheduling,
+historical report augmentation,
 recovery-based selection, and the unused configuration flags were removed.
 Existing older outputs remain archived; they cannot resume through this
 new code signature. Start a fresh output directory.

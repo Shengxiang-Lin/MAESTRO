@@ -97,7 +97,6 @@ class SingleTurnBranchTests(unittest.TestCase):
                 scenes_path=scenes, reports_path=reports,
                 clean_episodes_path=clean, output_dir=output,
                 max_scenes=1, branches_per_scene=1,
-                decision_unit="single_turn",
                 atomic_fault_kinds=["no_result", "result_summary_conflict"],
                 max_candidates_per_round=2, max_distractors_per_fault=1,
                 target_main_turns=2, workers=1, no_progress=True,

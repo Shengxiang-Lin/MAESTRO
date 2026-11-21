@@ -19,7 +19,6 @@ input:
 generation:
   output_dir: environment/data/stage4_llm_pilot_10_1000
   max_scenes: 10
-  decision_unit: single_turn  # one Main action per independently faulted feedback round
   branches_per_scene: null  # all legally returned Stage-3 feedback waves
   seed: 17
   # Enumerate executable one-atom variants with provenance-grounded distractors.

@@ -118,7 +118,7 @@ def run_pilot(output_dir: Path, *, count: int = 4,
         clean_episodes_path=output_dir / "stage3" / "episodes.jsonl",
         output_dir=output_dir / "stage4",
         max_scenes=count, branches_per_scene=feedback_rounds,
-        seed=17, decision_unit="single_turn",
+        seed=17,
         atomic_fault_kinds=list(FAULTS),
         # Exhaust feasible scenario targets in 4A; the smoke's expensive
         # language work is still bounded by one selected candidate per wave.
