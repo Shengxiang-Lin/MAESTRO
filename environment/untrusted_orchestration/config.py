@@ -13,13 +13,12 @@ _REQUIRED = {
     "generation": {
         "output_dir", "max_scenes", "branches_per_scene",
         "decision_unit",
-        "round_sampling_strategy", "max_post_fork_rounds", "seed",
+        "round_sampling_strategy", "seed",
         "max_rounds", "max_cost", "max_retries", "max_parallel_tasks",
         "workers", "mode", "report_max_revisions", "main_max_revisions",
         "sub_model", "model_alias", "overwrite", "no_progress",
         "atomic_fault_kinds", "max_candidates_per_round",
         "max_distractors_per_fault", "max_selected_per_round",
-        "selection_strategy", "max_diagnostics_per_scene",
         "max_language_attempts_per_round", "target_main_turns",
     },
     "model": {
@@ -67,13 +66,12 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             if source.get("clean_episodes") else None
         ),
         "output_dir": _path(run.get("output_dir")),
-        "decision_unit": run.get("decision_unit", "recovery_episode"),
+        "decision_unit": run.get("decision_unit", "single_turn"),
         "max_scenes": run.get("max_scenes"),
         "branches_per_scene": run.get("branches_per_scene"),
         "round_sampling_strategy": run.get(
             "round_sampling_strategy", "chronological"
         ),
-        "max_post_fork_rounds": run.get("max_post_fork_rounds"),
         "seed": run.get("seed", 17),
         "scenario_mode": "event_driven",
         "candidate_strategy": "enumerate",
@@ -87,12 +85,6 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             "max_selected_per_round", None
         ),
         "target_main_turns": run.get("target_main_turns"),
-        "selection_strategy": run.get(
-            "selection_strategy", "causal_rank"
-        ),
-        "max_diagnostics_per_scene": run.get(
-            "max_diagnostics_per_scene", 0
-        ),
         "max_language_attempts_per_round": run.get(
             "max_language_attempts_per_round", None
         ),
@@ -142,11 +134,6 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         "chronological", "stratified", "evidence_aware",
     }:
         raise ValueError("untrusted_invalid_round_sampling_strategy")
-    if config["max_post_fork_rounds"] is not None and (
-        type(config["max_post_fork_rounds"]) is not int
-        or config["max_post_fork_rounds"] < 1
-    ):
-        raise ValueError("untrusted_invalid_max_post_fork_rounds")
     for key in ("max_rounds", "max_cost",
                 "max_parallel_tasks", "workers", "author_max_tokens",
                 "critic_max_tokens", "report_author_max_tokens",
@@ -166,20 +153,13 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
     for key in ("overwrite", "no_progress"):
         if type(config[key]) is not bool:
             raise ValueError("untrusted_invalid_" + key)
-    if config["decision_unit"] not in {"single_turn", "recovery_episode"}:
+    if config["decision_unit"] != "single_turn":
         raise ValueError("untrusted_invalid_decision_unit")
     if config["mode"] not in {"llm", "template"}:
         raise ValueError("untrusted_mode_requires_template_or_llm")
-    # Current Stage-4 config fixes enumerate/event_driven; all other
-    # legacy fault knobs inherit the maintained generate_turns defaults.
+    # The maintained CLI accepts only the current single-turn, scenario-first
+    # path. Invalid obsolete configuration keys fail the strict schema check.
     from environment.untrusted_orchestration.runtime.atomic_faults import ATOM_TO_MODE
-    if config["selection_strategy"] not in {
-        "causal_rank", "stratified", "global_balanced", "scenario_first",
-    }:
-        raise ValueError("untrusted_invalid_selection_strategy")
-    if (type(config["max_diagnostics_per_scene"]) is not int
-            or not 0 <= config["max_diagnostics_per_scene"] <= 8):
-        raise ValueError("untrusted_invalid_max_diagnostics_per_scene")
     for field, minimum, maximum in (
         ("max_candidates_per_round", 1, 128),
         ("max_distractors_per_fault", 1, 10),

@@ -54,8 +54,11 @@ Use a new output directory because code signatures differ. Confirm
 published A/B1/B2/B3 counts, review acceptance, single-turn output
 contract, no leakage of private labels and frozen Stage 3 history.
 
-Legacy recovery-episode support is retained strictly for older callers;
-it is not part of the current single-turn dataset.
+The maintained YAML/CLI accepts only `single_turn`. Obsolete
+`recovery_episode`, `max_post_fork_rounds`, `selection_strategy`, and
+`max_diagnostics_per_scene` options are rejected rather than silently
+accepted. Old generated datasets can be inspected without reusing the old
+runtime interface.
 
 ## Selection diagnostics (single-turn)
 
