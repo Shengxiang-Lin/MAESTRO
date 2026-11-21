@@ -7,6 +7,7 @@ changes one latest received Sub-Agent report in each counterfactual.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -108,6 +109,9 @@ def run_pilot(*, target_scenes: int = 2, max_scene_scan: int = 50,
         found = None
         attempts = 0
         errors = []
+        outcomes = Counter()
+        diagnostics = []
+        diagnostic_signatures = set()
         for target in incoming:
             for variant in range(max_fault_variants):
                 try:
@@ -120,19 +124,65 @@ def run_pilot(*, target_scenes: int = 2, max_scene_scan: int = 50,
                         )],
                     )
                 except (ValueError, RuntimeError) as exc:
-                    errors.append(type(exc).__name__ + ":" + str(exc)[:110])
+                    outcomes["branch_error"] += 1
+                    if len(errors) < 5:
+                        errors.append(
+                            type(exc).__name__ + ":" + str(exc)[:110]
+                        )
                     continue
                 attempts += 1
                 issues, conflicts = current_public_witness(
                     audit, round_number,
                 )
                 realized = classify_observable_scenario(issues, conflicts)
-                if (realized["scenario_id"] == "B3"
-                        and any(
-                            c.get("kind")
-                            == "explicit_independent_claim_disagreement"
-                            for c in conflicts
-                        )):
+                independent = any(
+                    event.get("kind")
+                    == "explicit_independent_claim_disagreement"
+                    for event in conflicts
+                )
+                if independent and realized["scenario_id"] == "B3":
+                    category = (
+                        "b3_with_next_main_turn" if len(turns) == 1
+                        else "b3_without_accepted_next_main_turn"
+                    )
+                elif realized["scenario_id"]:
+                    category = "other_realized_" + realized["scenario_id"]
+                else:
+                    category = "no_visible_issue"
+                outcomes[category] += 1
+                signature = (
+                    category, tuple(realized["matched_scenarios"]),
+                    audit.get("execution_outcome"),
+                )
+                if (signature not in diagnostic_signatures
+                        and len(diagnostics) < 8):
+                    diagnostic_signatures.add(signature)
+                    fault_record = (audit.get("faults") or [{}])[0]
+                    payload = (
+                        (fault_record.get("execution") or {}).get(
+                            "report_fault_payload",
+                        ) or {}
+                    )
+                    diagnostics.append({
+                        "target_task": target,
+                        "variant": variant,
+                        "classification": category,
+                        "mutated_field": payload.get("field"),
+                        "mutated_row": payload.get("row_index"),
+                        "source_id": payload.get("source_id"),
+                        "realized_scenarios": realized["matched_scenarios"],
+                        "observable_issue_kinds":
+                            realized["observable_issue_kinds"],
+                        "conflict_kinds": sorted({
+                            event.get("kind") for event in conflicts
+                            if event.get("kind")
+                        }),
+                        "execution_outcome": audit.get("execution_outcome"),
+                        "next_main_turns": len(turns),
+                    })
+                # A visible B3 is not sufficient by itself: the Main
+                # next-decision label must actually have been produced.
+                if category == "b3_with_next_main_turn":
                     found = {
                         "question_id": scene["task_id"],
                         "status": "b3_observable",
@@ -150,12 +200,17 @@ def run_pilot(*, target_scenes: int = 2, max_scene_scan: int = 50,
                     break
             if found:
                 break
-        results.append(found or {
+        observation = {
+            "candidate_attempts": attempts,
+            "candidate_outcome_counts": dict(sorted(outcomes.items())),
+            "diagnostic_examples": diagnostics,
+            "errors": errors,
+        }
+        results.append({**found, **observation} if found else {
             "question_id": scene["task_id"],
             "status": "no_visible_b3_after_variants",
             "round": round_number,
-            "candidate_attempts": attempts,
-            "errors": errors[:5],
+            **observation,
         })
         # A structurally comparable scene is not guaranteed to admit
         # a public conflict under the bounded, source-backed variants.
