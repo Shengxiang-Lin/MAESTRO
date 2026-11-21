@@ -271,7 +271,7 @@ class Stage4BackfillTests(unittest.TestCase):
             self.assertEqual(sum(x["selected_for_language_review"]
                                  for x in selection), 2)
             self.assertEqual(
-                sum(x.get("selection_reason") ==
+                sum(x.get("language_review_selection_reason") ==
                     "language_review_backfill_after_rejection"
                     for x in selection), 1,
             )

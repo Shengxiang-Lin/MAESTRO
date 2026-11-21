@@ -191,8 +191,9 @@ class StratifiedForkTests(unittest.TestCase):
         cfg = load_config()
         self.assertEqual(cfg["round_sampling_strategy"], "chronological")
         self.assertIsNone(cfg["branches_per_scene"])
-        self.assertEqual(cfg["max_post_fork_rounds"], 8)
-        self.assertEqual(cfg["max_diagnostics_per_scene"], 1)
+        self.assertEqual(cfg["decision_unit"], "single_turn")
+        self.assertNotIn("max_post_fork_rounds", cfg)
+        self.assertNotIn("max_diagnostics_per_scene", cfg)
 
 
 class ShortReplayTests(unittest.TestCase):
