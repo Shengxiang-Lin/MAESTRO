@@ -848,41 +848,15 @@ class ExecutionState:
         investigation, never proof about which reporter is right. Sources
         may be shared, but shared sources do not count as independent votes.
         """
-        from .scenario.history_conflicts import (
-            latest_history_disagreements, same_query_disagreements,
-        )
-        from .scenario.prior_observation import comparison_rows
-        from .scenario.handoff_conflicts import handoff_disagreements
+        from .inspection.history_reports import latest_history_disagreements
 
-        # Include a genuinely executed *earlier* direct-source lookup.
-        # Its relation to the latest query is explicit in the prior task
-        # instruction and verified offline by the same source record.
-        # A single newest report may disagree with several genuinely earlier
-        # reports. Record every distinct old/new claim pair, but request only
-        # one recheck of that newest task version.
+        # The existing frozen Stage-3 history is the only admissible
+        # cross-round witness. Never patch an older report or append a
+        # synthetic verification task to create a conflict.
         history_messages = {}
-        for conflict in (latest_history_disagreements(self)
-                         + same_query_disagreements(self)
-                         + handoff_disagreements(self)
-                         + comparison_rows(self)):
+        for conflict in latest_history_disagreements(self):
             target = conflict["latest_task"]
             old = conflict["older_task"]
-            # Recheck the newest report first. If it still disagrees
-            # after a real retry, verify the older report. This decision
-            # uses only visible disagreement and attempt versions.
-            matching_events = [
-                event for event in self.detected_conflicts
-                if set(event.get("compared_parent_tasks", [])) == {old, target}
-            ]
-            if matching_events:
-                prior = matching_events[-1]
-                if (conflict.get("comparison_kind") != "same_query_result_set"
-                        or prior.get("kind") != "cross_round_report_disagreement"
-                        or prior["recheck_task_id"] != target
-                        or self.current[target].version <=
-                           prior["recheck_task_version"]):
-                    continue
-                target = old
             current = self.current.get(target)
             if current is None or not (
                 current.status == "done"
@@ -1076,15 +1050,7 @@ class ExecutionState:
             return []
         if self._public_conflict_cache is not None:
             return self._public_conflict_cache
-        from .scenario.history_conflicts import public_claims, same_query_disagreements
-        from .scenario.prior_observation import comparison_rows
-        from .scenario.handoff_conflicts import handoff_disagreements
-        remaining = {
-            (row["older_task"], row["latest_task"], row["attribute"])
-            for row in (comparison_rows(self, require_visible_scope=False)
-                        + handoff_disagreements(self)
-                        + same_query_disagreements(self, require_latest=False))
-        }
+        from .inspection.history_reports import public_claims
         claims = public_claims(self)
         independent = self._explicit_report_claims()
         active = []
@@ -1095,25 +1061,21 @@ class ExecutionState:
                 continue
             old, recent = event["compared_parent_tasks"]
             wanted = event["claim"]
-            if kind == "cross_round_report_disagreement" and event.get(
-                "comparison_kind"
-            ) in {"earlier_source_lookup", "earlier_source_survey",
-                  "earlier_keyed_handoff", "same_query_result_set"}:
-                unresolved = (old, recent, wanted["attribute"]) in remaining
-            else:
-                source = independent if kind == "explicit_independent_claim_disagreement" else claims
-                values = {}
-                for row in source:
-                    if (row["task_id"] in (old, recent)
-                            and row["subject"] == wanted["subject"]
-                            and row["attribute"] == wanted["attribute"]
-                            and (kind != "explicit_independent_claim_disagreement"
-                                 or row["valid_scope"] == wanted["valid_scope"])):
-                        values.setdefault(row["task_id"], set()).add(
-                            (type(row["value"]).__name__, repr(row["value"]))
-                        )
-                # Losing a once-cited claim is not a verified resolution.
-                unresolved = old not in values or recent not in values or values[old] != values[recent]
+            source = (independent if kind == "explicit_independent_claim_disagreement"
+                      else claims)
+            values = {}
+            for row in source:
+                if (row["task_id"] in (old, recent)
+                        and row["subject"] == wanted["subject"]
+                        and row["attribute"] == wanted["attribute"]
+                        and (kind != "explicit_independent_claim_disagreement"
+                             or row["valid_scope"] == wanted["valid_scope"])):
+                    values.setdefault(row["task_id"], set()).add(
+                        (type(row["value"]).__name__, repr(row["value"]))
+                    )
+            # A missing once-cited claim does not prove resolution.
+            unresolved = (old not in values or recent not in values
+                          or values[old] != values[recent])
             if unresolved:
                 active.append(event)
         self._public_conflict_cache = active
