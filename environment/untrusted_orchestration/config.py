@@ -19,7 +19,7 @@ _REQUIRED = {
         "sub_model", "model_alias", "overwrite", "no_progress",
         "atomic_fault_kinds", "max_candidates_per_round",
         "max_distractors_per_fault", "max_selected_per_round",
-        "max_language_attempts_per_round", "target_main_turns",
+        "target_main_turns",
     },
     "model": {
         "author_api_base", "author_model", "critic_api_base",
@@ -85,9 +85,6 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             "max_selected_per_round", None
         ),
         "target_main_turns": run.get("target_main_turns"),
-        "max_language_attempts_per_round": run.get(
-            "max_language_attempts_per_round", None
-        ),
         "atomic_fault_kinds": run.get("atomic_fault_kinds", [
             "no_result", "incomplete_retrieval", "done_but_incomplete",
             "wrong_retrieval", "wrong_entity_binding", "computation_error",
@@ -164,7 +161,6 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         ("max_candidates_per_round", 1, 128),
         ("max_distractors_per_fault", 1, 10),
         ("max_selected_per_round", 1, 8),
-        ("max_language_attempts_per_round", 1, 8),
     ):
         value = config[field]
         if value is not None and (
@@ -176,11 +172,6 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
         or config["target_main_turns"] < 1
     ):
         raise ValueError("untrusted_invalid_target_main_turns")
-    if (config["max_language_attempts_per_round"] is not None
-            and config["max_selected_per_round"] is not None
-            and config["max_language_attempts_per_round"] <
-            config["max_selected_per_round"]):
-        raise ValueError("untrusted_language_budget_smaller_than_selection")
     kinds = config["atomic_fault_kinds"]
     if (not isinstance(kinds, list) or not kinds
             or any(not isinstance(k, str) for k in kinds)
