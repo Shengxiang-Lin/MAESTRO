@@ -1321,6 +1321,27 @@ def generate_turns(
                     for row in selection_rows
                 ).items()
             ))
+        if decision_unit == "single_turn":
+            selection_stats["target_realization_distribution"] = dict(sorted(
+                Counter(
+                    f"{row.get('target_scenario') or 'none'}->"
+                    f"{row.get('realized_scenario') or 'none'}"
+                    for row in selection_rows
+                ).items()
+            ))
+            selection_stats["no_public_witness_by_fault_kind"] = dict(sorted(
+                Counter(
+                    row["atom_kind"] for row in selection_rows
+                    if row["realized_scenario"] is None
+                ).items()
+            ))
+            selection_stats["budget_reserve_by_scenario"] = dict(sorted(
+                Counter(
+                    row["realized_scenario"] for row in selection_rows
+                    if (not row["selected_for_language_review"]
+                        and row["recovery_rank"] is not None)
+                ).items()
+            ))
         selection_stats["candidates_selected_for_language_review"] = len(
             attempted
         )

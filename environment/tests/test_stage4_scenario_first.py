@@ -211,6 +211,22 @@ class ScenarioSelectionTests(unittest.TestCase):
                 sum(summary["candidate_screening_outcomes"].values()),
                 len(selection),
             )
+            self.assertEqual(
+                sum(summary["target_realization_distribution"].values()),
+                len(selection),
+            )
+            self.assertEqual(
+                sum(summary["no_public_witness_by_fault_kind"].values()),
+                summary["candidate_screening_outcomes"].get(
+                    "no_public_witness", 0
+                ),
+            )
+            self.assertEqual(
+                sum(summary["budget_reserve_by_scenario"].values()),
+                summary["candidate_screening_outcomes"].get(
+                    "budget_reserve", 0
+                ),
+            )
             self.assertTrue(all(
                 row["selection_reason"] not in {
                     "not_execution_recovered", "language_review_primary",
