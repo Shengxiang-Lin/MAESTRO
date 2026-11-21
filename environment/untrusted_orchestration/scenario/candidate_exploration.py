@@ -1,4 +1,4 @@
-"""Zero-LLM enumeration of genuine Stage-4 atomic fault candidates.
+"""Scenario-first single-turn enumeration with isolated legacy recovery.
 
 The original Macro DAG is an executable *baseline*, not a verifier graph.
 All accepted feedback rounds are eligible. Existing returned-task faults
@@ -23,6 +23,9 @@ from environment.untrusted_orchestration.runtime.faults import FaultUnsupported,
 from .scenario_generator import make_scenario
 from .handoff_conflicts import discover_handoffs, fault_breaks_handoff
 from .same_source_recheck import discover_same_source_rechecks
+from .observable_scenarios import (
+    CONSTRUCTION_ORDER, feasible_fault_targets,
+)
 
 
 _VARIANT_KINDS = {
@@ -110,6 +113,104 @@ def _stable_candidate_order(
     return output
 
 
+
+def _variant_count(
+    scene: dict, task: dict, kind: str, products: dict,
+    max_distractors: int | None,
+) -> int:
+    """One shared finite enumeration bound for both generation paths."""
+    if kind not in _VARIANT_KINDS:
+        return 1
+    if max_distractors is not None:
+        return max_distractors
+    if kind == "computation_error":
+        return 4
+    source_rows = sum(
+        len(scene["world"]["sources"][sid].get("observations", []))
+        for sid in task.get("source_ids", [])
+    )
+    parent_rows = sum(
+        len(relation_rows(products[pid]))
+        for pid in task.get("depends_on", [])
+    )
+    return max(1, (source_rows + parent_rows) *
+               max(1, len(task["outputs"]["typed_relation"])))
+
+
+def _enumerate_scenario_first(
+    scene: dict, round_plan: dict, *,
+    atomic_fault_kinds: list[str], max_candidates: int | None,
+    max_distractors: int | None, seed: int, base_episode: dict | None,
+) -> list[dict]:
+    """Current Stage-4 main path: A/B1/B2/B3 -> legal operator -> public audit.
+
+    No historical augmentation, extra Main delegation, future recovery
+    rollout, or secret Gold is used to establish the *target* scenario.
+    A target is only a plan until 4A independently verifies public issues.
+    """
+    targets = feasible_fault_targets(
+        scene, round_plan, kinds=atomic_fault_kinds,
+        base_episode=base_episode,
+    )
+    tasks = {task["task_id"]: task for task in scene["macro_graph"]["tasks"]}
+    products = _clean_products(scene)
+    seed_local = (
+        seed + round_plan["scene_index"] * 1009
+        + round_plan["branch_round"] * 92821
+    )
+    eligible = defaultdict(list)
+    for target, tid, kind in targets:
+        for variant in range(_variant_count(
+            scene, tasks[tid], kind, products, max_distractors,
+        )):
+            if _candidate_is_real(scene, tasks[tid], kind, variant, products):
+                eligible[target].append((tid, kind, variant))
+    ordered = [
+        (target, tid, kind, variant)
+        for target in CONSTRUCTION_ORDER
+        for tid, kind, variant in _stable_candidate_order(
+            eligible[target], seed_local + CONSTRUCTION_ORDER.index(target),
+        )
+    ]
+    if not ordered:
+        skipped = deepcopy(round_plan)
+        skipped.update({
+            "faults": [], "fault_mode": None,
+            "skip_reason": "no_executable_scenario_target_on_returned_batch",
+            "sample_id": round_plan["sample_id"] + "-candidate-none",
+            "candidate_count_total": 0, "candidate_count_pruned": 0,
+            "candidate_variant_index": None, "target_scenario": None,
+        })
+        skipped["scenario_plan"] = make_scenario(
+            scene, skipped, mode="event_driven", max_fault_atoms=1,
+            delayed_evidence_probability=0.0,
+        )
+        return [skipped]
+    sampled = ordered if max_candidates is None else ordered[:max_candidates]
+    trials = []
+    for slot, (target, tid, kind, variant) in enumerate(sampled, 1):
+        item = deepcopy(round_plan)
+        item.update({
+            "sample_id": round_plan["sample_id"] + f"-candidate-{slot:03d}",
+            "target_scenario": target,
+            "candidate_count_total": len(ordered),
+            "candidate_count_pruned": len(ordered) - len(sampled),
+            "candidate_variant_index": variant,
+            "skip_reason": None, "fault_mode": kind,
+            "faults": [AtomicFault(
+                kind, tid, origin_round=round_plan["branch_round"] - 1,
+                seed=seed_local + slot, variant_index=variant,
+            ).as_legacy_fault()],
+        })
+        item["scenario_plan"] = make_scenario(
+            scene, item, mode="event_driven", max_fault_atoms=1,
+            delayed_evidence_probability=0.0,
+        )
+        item["scenario_plan"]["target_scenario"] = target
+        trials.append(item)
+    return trials
+
+
 def enumerate_round_candidates(
     scene: dict, round_plan: dict, *,
     atomic_fault_kinds: list[str],
@@ -135,33 +236,24 @@ def enumerate_round_candidates(
     original_reason = round_plan["skip_reason"]
     if original_reason == "insufficient_recovery_round_budget":
         return [deepcopy(round_plan)]
+    if preserve_stage3_history:
+        if max_fault_atoms != 1 or delayed_evidence_probability:
+            raise ValueError("single_turn_requires_one_immediate_fault")
+        return _enumerate_scenario_first(
+            scene, round_plan, atomic_fault_kinds=atomic_fault_kinds,
+            max_candidates=max_candidates, max_distractors=max_distractors,
+            seed=seed, base_episode=base_episode,
+        )
+    # Explicitly isolated legacy multi-round recovery path below.
     tasks = {t["task_id"]: t for t in scene["macro_graph"]["tasks"]}
     products = _clean_products(scene)
     eligible = []
     for tid in round_plan["incoming_task_ids"]:
         task = tasks[tid]
         for kind in atomic_fault_kinds:
-            if kind not in _VARIANT_KINDS:
-                variants = 1
-            elif max_distractors is not None:
-                variants = max_distractors
-            elif kind == "computation_error":
-                variants = 4
-            else:
-                # Exhaust finite *real* alternatives from already granted
-                # observations and upstream products. More source records
-                # may yield more valid variants, but never invented values.
-                source_rows = sum(
-                    len(scene["world"]["sources"][sid].get("observations", []))
-                    for sid in task.get("source_ids", [])
-                )
-                parent_rows = sum(
-                    len(relation_rows(products[pid]))
-                    for pid in task.get("depends_on", [])
-                )
-                variants = max(1, (
-                    source_rows + parent_rows
-                ) * max(1, len(task["outputs"]["typed_relation"])))
+            variants = _variant_count(
+                scene, task, kind, products, max_distractors,
+            )
             for variant in range(variants):
                 if _candidate_is_real(
                     scene, tasks[tid], kind, variant, products
