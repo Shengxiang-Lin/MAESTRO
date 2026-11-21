@@ -27,7 +27,7 @@ generation:
   max_candidates_per_round: null  # enumerate every executable one-atom fault
   max_distractors_per_fault: null  # try all source-backed distractor variants
   max_selected_per_round: null  # retain all causally distinct recovered behaviors
-  selection_strategy: global_balanced  # fair fault-kind and recovery-behavior coverage
+  selection_strategy: scenario_first  # balance Main-visible A / B1 / B2 / B3, not fault labels
   max_diagnostics_per_scene: 0  # leave negative traces in private 4A; focus costly LLM work on positives
   target_main_turns: 1000  # 1,000 independent Main decisions (one per variant)
   max_language_attempts_per_round: null  # review every distinct recovered candidate

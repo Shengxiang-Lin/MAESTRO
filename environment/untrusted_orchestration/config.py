@@ -174,7 +174,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
     # legacy fault knobs inherit the maintained generate_turns defaults.
     from environment.untrusted_orchestration.runtime.atomic_faults import ATOM_TO_MODE
     if config["selection_strategy"] not in {
-        "causal_rank", "stratified", "global_balanced",
+        "causal_rank", "stratified", "global_balanced", "scenario_first",
     }:
         raise ValueError("untrusted_invalid_selection_strategy")
     if (type(config["max_diagnostics_per_scene"]) is not int
