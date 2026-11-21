@@ -33,9 +33,11 @@ def _published_result_formats(episodes: list[dict]) -> dict:
             number = step.get("attempt")
             if not isinstance(number, int) or not isinstance(fault_round, int):
                 continue
-            phase = ("clean_prefix" if number < fault_round - 1 else
-                     "faulted_latest_batch" if number == fault_round - 1 else
-                     "recovery_continuation")
+            # No post-fork Sub-Agent has executed in a single-turn episode.
+            if number >= fault_round:
+                continue
+            phase = ("clean_prefix" if number < fault_round - 1
+                     else "faulted_latest_batch")
             for report in (step.get("result") or {}).get("subtask_results", []):
                 finish = report.get("finish_result") or report
                 value = finish.get("result") if isinstance(finish, dict) else None

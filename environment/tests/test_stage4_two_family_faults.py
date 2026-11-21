@@ -562,19 +562,12 @@ class IntraReportFaultTests(unittest.TestCase):
                 }}],
             }},
             {"attempt": 2, "action": "delegate_task", "result": {
-                "subtask_results": [
-                    {"finish_result": {"status": "missing", "result": ""}},
-                    {"finish_result": {"status": "done",
-                                       "result": "The metric was rechecked."}},
-                ],
+                "pending": True, "subtask_results": [],
             }},
         ]}
         self.assertEqual(_published_result_formats([episode]), {
             "clean_prefix": {"legacy_prose": 1},
             "faulted_latest_batch": {"typed_evidence_json": 1},
-            "recovery_continuation": {
-                "missing": 1, "legacy_prose": 1,
-            },
         })
 
 
