@@ -56,13 +56,17 @@ def fixture(root: Path):
             "prompt": [{"role": "user", "content": "O1 visible prompt " + scene}],
             "reference_action": action,
         })
-    cases.append({
-        "case_id": "fault:scene-00:1",
-        "scene_id": "scene-00",
-        "kind": "fault_injected",
-        "fault": {"atoms": [{"kind": "wrong_retrieval"}]},
-        "recovery": {"globally_recovered": True},
-    })
+    for i in (1, 2):
+        cases.append({
+            "case_id": f"fault:scene-00:{i}",
+            "scene_id": "scene-00",
+            "kind": "fault_injected",
+            "fault": {"atoms": [{"kind": "wrong_retrieval"}]},
+            "recovery": {
+                "decision_accepted": True,
+                "globally_recovered": None,
+            },
+        })
     decisions.append({
         **deepcopy(decisions[0]),
         "decision_id": "stage4:scene-00:1",
@@ -72,15 +76,15 @@ def fixture(root: Path):
         "generation_mode": "llm_reviewed",
         "prompt": [{
             "role": "user",
-            "content": "O1 recovery prompt with visible reports",
+            "content": "O1 next-decision prompt with visible reports",
         }],
     })
     decisions.append({
         **deepcopy(decisions[0]),
         "decision_id": "stage4:scene-00:2",
-        "case_id": "fault:scene-00:1",
+        "case_id": "fault:scene-00:2",
         "source": "untrusted",
-        "decision_round": 3,
+        "decision_round": 2,
         "generation_mode": "template",
         "prompt": [{
             "role": "user", "content": "O1 fallback example",
