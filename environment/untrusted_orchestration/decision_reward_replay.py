@@ -173,7 +173,16 @@ def replay_reward_states(scene, episode, audit, *,
             task_ids = graph["reference_waves"][rnd - 1]
         else:
             task_ids = decisions[rnd]["task_ids"]
-        returned = (step.get("result") or {}).get("subtask_results")
+        result = step.get("result") or {}
+        returned = result.get("subtask_results")
+        # The single-turn teacher stops at the current Main action. Its
+        # pending batch was NOT executed, so there can be no later reports.
+        # We have already captured the decision-time state above.
+        if (rnd >= fork and audit.get("decision_unit") == "single_turn"
+                and result.get("pending") is True):
+            if step is not episode["trajectory"][-1] or returned != []:
+                raise ValueError("single_turn_pending_batch_has_future_result")
+            continue
         if not isinstance(returned, list) or len(returned) != len(task_ids):
             raise ValueError("replay report/decision cardinality mismatch")
         for tid, report in zip(task_ids, returned):

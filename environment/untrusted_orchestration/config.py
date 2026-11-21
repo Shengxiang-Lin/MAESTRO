@@ -12,6 +12,7 @@ _REQUIRED = {
     "input": {"scenes", "reports", "clean_episodes"},
     "generation": {
         "output_dir", "max_scenes", "branches_per_scene",
+        "decision_unit",
         "round_sampling_strategy", "max_post_fork_rounds", "seed",
         "max_rounds", "max_cost", "max_retries", "max_parallel_tasks",
         "workers", "mode", "report_max_revisions", "main_max_revisions",
@@ -66,6 +67,7 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
             if source.get("clean_episodes") else None
         ),
         "output_dir": _path(run.get("output_dir")),
+        "decision_unit": run.get("decision_unit", "recovery_episode"),
         "max_scenes": run.get("max_scenes"),
         "branches_per_scene": run.get("branches_per_scene"),
         "round_sampling_strategy": run.get(
@@ -164,6 +166,8 @@ def load_config(path: Path | str = DEFAULT_CONFIG) -> dict:
     for key in ("overwrite", "no_progress"):
         if type(config[key]) is not bool:
             raise ValueError("untrusted_invalid_" + key)
+    if config["decision_unit"] not in {"single_turn", "recovery_episode"}:
+        raise ValueError("untrusted_invalid_decision_unit")
     if config["mode"] not in {"llm", "template"}:
         raise ValueError("untrusted_mode_requires_template_or_llm")
     # Current Stage-4 config fixes enumerate/event_driven; all other

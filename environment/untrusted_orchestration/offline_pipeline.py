@@ -82,6 +82,9 @@ def _refresh_visible_claim_supervision(
     for step in episode["trajectory"]:
         if step.get("action") != "delegate_task":
             continue
+        if (step.get("result") or {}).get("pending"):
+            # Single-turn mode has a next action, not a returned batch.
+            continue
         number = step["attempt"]
         if observed_rounds is not None and number not in observed_rounds:
             continue
@@ -713,10 +716,12 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
                        "stage4c_dispatch_validation_rejected",
                    ))
                    else failure)
-    elif execution_outcome == "recovered" and (
+    elif execution_outcome in {"recovered", "single_turn_planned"} and (
         had_report_fallback or had_main_fallback
     ):
         outcome = "language_review_unaccepted"
+    elif execution_outcome == "single_turn_planned":
+        outcome = "single_turn_accepted"
     else:
         outcome = execution_outcome
     # Preserve each individually reviewed Main decision in the PRIVATE
@@ -733,7 +738,7 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
     # Stage4B/4C may replace the original 4A report prose. Refresh reward
     # states using the FINAL reports actually delivered to Main; never train
     # on 4A-only snapshots which might disagree with final visible history.
-    if outcome == "recovered":
+    if outcome in {"recovered", "single_turn_accepted"}:
         from .decision_reward_replay import replay_reward_states
         settings = audit.get("decision_reward_settings") or {}
         try:
@@ -756,7 +761,10 @@ def author_branch_main(scene: dict, episode: dict, audit: dict, *,
         failure is None and not had_report_fallback and not had_main_fallback
     )
     audit["language_evidence_issues"] = [failure] if failure else []
-    audit["accepted_turns"] = len(turns) if outcome == "recovered" else 0
+    audit["accepted_turns"] = (
+        len(turns) if outcome in {"recovered", "single_turn_accepted"} else 0
+    )
     episode["outcome"] = outcome
     episode["recovered"] = outcome == "recovered"
-    return episode, turns if outcome == "recovered" else [], audit
+    return episode, (turns if outcome in {
+        "recovered", "single_turn_accepted"} else []), audit

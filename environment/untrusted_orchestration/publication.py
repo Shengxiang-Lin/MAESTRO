@@ -126,7 +126,7 @@ def _publish(output: Path, planned: list[dict],
             for turn in data.get("turns", [])
         ]
         leaks = [row for row in leaks if row["issues"]]
-        if status == "recovered" and leaks:
+        if status in {"recovered", "single_turn_accepted"} and leaks:
             status = "publication_generation_process_leak"
             publication_guard_rows.append({
                 "branch_index": plan["index"],
@@ -160,7 +160,7 @@ def _publish(output: Path, planned: list[dict],
         event_outcomes[plan["scenario_plan"]["blueprint"]][status] += 1
         for atom in plan["scenario_plan"]["fault_atoms"]:
             atom_outcomes[atom["kind"]][status] += 1
-        if status == "recovered" and (
+        if status in {"recovered", "single_turn_accepted"} and (
             not isinstance(data.get("private_audit"), dict)
             or data["private_audit"].get("parallel_batches_verified") is not True
         ):
@@ -171,7 +171,7 @@ def _publish(output: Path, planned: list[dict],
         # final language/action review failed. Such Episodes are never
         # positive training data. Apply the SAME acceptance predicate to
         # public episodes and public Main turns.
-        if status == "recovered":
+        if status in {"recovered", "single_turn_accepted"}:
             if not isinstance(data.get("episode"), dict):
                 raise RuntimeError(
                     "untrusted_recovered_branch_missing_public_episode"
@@ -185,7 +185,7 @@ def _publish(output: Path, planned: list[dict],
                 or (event.get("kind") == "explicit_independent_claim_disagreement"
                     and event.get("conflict_timing") == "delayed")
             ]
-            if history_events:
+            if history_events and status == "recovered":
                 published_recovered_historical_conflicts += 1
                 gaps = {
                     event["latest_round"] - event["older_round"]
@@ -196,7 +196,7 @@ def _publish(output: Path, planned: list[dict],
                 }
                 published_history_gap_distribution.update(gaps)
             causal = data["private_audit"].get("delayed_causal_audit")
-            if causal is not None:
+            if causal is not None and status == "recovered":
                 if (not causal["observable_conflict"]
                         or not causal["impacted_consumers"]
                         or not causal["invalidated_consumers"]
@@ -286,17 +286,18 @@ def _publish(output: Path, planned: list[dict],
                     claim_state_diagnostics.append({
                         **state_label, "global_publication_status": status,
                     })
-                if (status == "recovered" or (
+                if (status in {"recovered", "single_turn_accepted"} or (
                     status != "not_selected_for_language_review"
                     and audit.get("language_review_accepted") is True
                 )):
                     reviewed_observable_states.append({
                         **state_label,
                         "global_outcome_private": status,
-                        "positive_main_action_label": status == "recovered",
+                        "positive_main_action_label": status in {
+                            "recovered", "single_turn_accepted"},
                         "label_scope": "observable_claim_state_only",
                     })
-                if status == "recovered":
+                if status in {"recovered", "single_turn_accepted"}:
                     claim_state_supervision.append(state_label)
                     claim_state_statuses.update(
                         node["status"] for node in
@@ -534,10 +535,12 @@ def _publish(output: Path, planned: list[dict],
     return {
         "completed_branches": sum(counters.values()),
         "recovered": counters["recovered"],
+        "single_turn_accepted": counters["single_turn_accepted"],
         "incorrect": counters["incorrect_result_after_actual_propagation"],
         "unresolved": sum(count for status, count in counters.items()
                           if status not in {
-                              "recovered", "skipped_unsupported",
+                              "recovered", "single_turn_accepted",
+                              "skipped_unsupported",
                               "rejected_validation",
                               "incorrect_result_after_actual_propagation",
                               "not_selected_for_language_review",

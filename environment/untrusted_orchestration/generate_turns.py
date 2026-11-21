@@ -36,6 +36,7 @@ from .inspection.publication_guard import review_turn_surface
 from .storage import _atomic_json, _atomic_jsonl
 from .scenario.candidate_exploration import expand_all_rounds
 from .scenario.candidate_selection import select_recovered_candidates
+from .scenario.single_turn_selection import select_single_turn_candidates
 from .scenario.round_sampling import select_feedback_rounds
 from environment.untrusted_orchestration.inspection.evidence_affordances import analyze_scene_evidence_affordances
 
@@ -116,6 +117,7 @@ def _signature(inputs: tuple[Path, Path], settings: dict) -> dict:
         "scenario/scenario_generator.py", "scenario/round_sampling.py",
         "scenario/candidate_exploration.py",
         "scenario/candidate_selection.py",
+        "scenario/single_turn_selection.py",
         "inspection/evidence_affordances.py", "orchestration/reasoning_fidelity.py",
         "inspection/visible_history.py", "inspection/visible_claim_state.py",
         "inspection/visible_claim_extraction.py",
@@ -326,6 +328,7 @@ def _plan_branches(
 def generate_turns(
     *, scenes_path: Path, reports_path: Path, output_dir: Path,
     max_scenes: int | None = 30, branches_per_scene: int | None = None,
+    decision_unit: str = "recovery_episode",
     round_sampling_strategy: str = "chronological",
     max_post_fork_rounds: int | None = None,
     seed: int = 17, fault_modes: list[str] | None = None,
@@ -399,6 +402,10 @@ def generate_turns(
     } or any(output.resolve() == p.parent.resolve() for p in paths):
         raise ValueError("untrusted_output_overwrites_input")
 
+    if decision_unit not in {"single_turn", "recovery_episode"}:
+        raise ValueError("untrusted_invalid_decision_unit")
+    if decision_unit == "single_turn" and candidate_strategy != "enumerate":
+        raise ValueError("single_turn_requires_enumerate_candidates")
     if candidate_strategy not in {"sample_one", "enumerate"}:
         raise ValueError("invalid_candidate_strategy")
     if candidate_strategy == "enumerate" and scenario_mode != "event_driven":
@@ -447,6 +454,7 @@ def generate_turns(
     ):
         raise ValueError("invalid_delayed_evidence_probability")
     settings = {
+        "decision_unit": decision_unit,
         "max_scenes": max_scenes,
         "branches_per_scene": branches_per_scene,
         "round_sampling_strategy": round_sampling_strategy,
@@ -528,6 +536,17 @@ def generate_turns(
             seed=seed, base=base,
             max_parallel_tasks=max_parallel_tasks,
         )
+    if decision_unit == "single_turn":
+        # The experiment belongs to the *latest received* Sub-Agent batch.
+        # An earlier poisoned report discovered much later is a different
+        # research setting and must not be silently mixed into this dataset.
+        planned = [
+            item for item in planned
+            if (item["scenario_plan"].get("blueprint") !=
+                "delayed_consumed_error_recovery")
+        ]
+        for index, item in enumerate(planned):
+            item["index"] = index
     if overwrite and output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -702,6 +721,8 @@ def generate_turns(
         status = data.get("status", "rejected_validation")
         if status == "recovered":
             return "recovered"
+        if status == "single_turn_planned":
+            return "planned"
         if status == "incorrect_result_after_actual_propagation":
             return "incorrect"
         if status in {"skipped_unsupported", "rejected_validation"}:
@@ -771,6 +792,8 @@ def generate_turns(
                 if stage == "simulation":
                     display = {
                         "recovered": counts["recovered"],
+                        **({"planned": counts["planned"]}
+                           if decision_unit == "single_turn" else {}),
                         "incorrect": counts["incorrect"],
                         "unresolved": counts["unresolved"],
                         "skipped": counts["skipped"],
@@ -921,6 +944,7 @@ def generate_turns(
             "max_post_fork_rounds": max_post_fork_rounds,
             "max_retries": max_retries,
             "max_parallel_tasks": max_parallel_tasks,
+            "single_turn": decision_unit == "single_turn",
             "sub_model": sub_model, "model_alias": model_alias,
             "author": None, "critic": None,
             "report_author": None, "report_critic": None,
@@ -935,7 +959,16 @@ def generate_turns(
     # The 4A search is intentionally wider than the expensive 4B/4C
     # publication candidates. Keep ALL executions in stage4a/journal
     # and an explicit private selection ledger, including failures.
-    if candidate_strategy == "enumerate":
+    if candidate_strategy == "enumerate" and decision_unit == "single_turn":
+        selected_indices, selection_rows, selection_stats = (
+            select_single_turn_candidates(
+                planned, [saved(stage_a, plan) for plan in planned],
+                target_main_turns=target_main_turns,
+                max_selected_per_round=max_selected_per_round,
+                seed=seed,
+            )
+        )
+    elif candidate_strategy == "enumerate":
         selected_indices, selection_rows, selection_stats = (
             select_recovered_candidates(
                 planned, [saved(stage_a, plan) for plan in planned],
@@ -1050,7 +1083,12 @@ def generate_turns(
     def published_recovery(index: int) -> bool:
         current = saved(journal, by_index[index])
         return (
-            current is not None and current.get("status") == "recovered"
+            current is not None
+            and current.get("status") in {"recovered", "single_turn_accepted"}
+            and len(current.get("turns", [])) == (
+                1 if decision_unit == "single_turn"
+                else action_count(current)
+            )
             and not any(review_turn_surface(turn) for turn in current["turns"])
         )
 
@@ -1094,6 +1132,63 @@ def generate_turns(
         if candidate_strategy != "enumerate":
             break
         next_active = set()
+        if decision_unit == "single_turn":
+            successful = sum(
+                published_recovery(i) for i in attempted
+            )
+            remaining = (max(0, target_main_turns - successful)
+                         if target_main_turns is not None else 0)
+            if remaining <= 0:
+                active = set()
+                continue
+            # Replace failed single-turn labels with other real, visible,
+            # source-legal candidates. Prefer the same feedback/fault class,
+            # but never require a future successful recovery trajectory.
+            failed_keys = {
+                (row["question_id"], row["feedback_round"], row["atom_kind"])
+                for row in selection_rows
+                if row["candidate_index"] in attempted
+                and row.get("selection_purpose") == "positive"
+                and not published_recovery(row["candidate_index"])
+            }
+            pools = defaultdict(list)
+            for row in selection_rows:
+                if (row.get("recovery_rank") is not None
+                        and row["candidate_index"] not in attempted):
+                    key = (row["question_id"], row["feedback_round"], row["atom_kind"])
+                    pools[key].append(row)
+            for pool in pools.values():
+                pool.sort(key=lambda row: row["recovery_rank"])
+            accepted_by_round = Counter(
+                (row["question_id"], row["feedback_round"])
+                for row in selection_rows
+                if row["candidate_index"] in attempted
+                and published_recovery(row["candidate_index"])
+            )
+            keys = sorted(pools, key=lambda key: (
+                key not in failed_keys, accepted_by_round[key[:2]], key
+            ))
+            next_active = set()
+            while remaining and any(pools.values()):
+                made_progress = False
+                for key in keys:
+                    if remaining == 0:
+                        break
+                    if (max_selected_per_round is not None
+                            and accepted_by_round[key[:2]] >= max_selected_per_round):
+                        continue
+                    if not pools[key]:
+                        continue
+                    row = pools[key].pop(0)
+                    next_active.add(row["candidate_index"])
+                    accepted_by_round[key[:2]] += 1
+                    backfilled_groups.add(key[:2])
+                    remaining -= 1
+                    made_progress = True
+                if not made_progress:
+                    break
+            active = next_active
+            continue
         if target_main_turns is not None:
             # Globally budgeted selection may have many unseen reserves.
             # Use one only to replace a FAILED initially selected positive,
@@ -1260,10 +1355,13 @@ def generate_turns(
             else "partial"
         ),
         "publication_status": (
-            "all_rounds_accepted"
+            "filtered_by_visibility_or_language_review"
+            if decision_unit == "single_turn"
+            else "all_rounds_accepted"
             if counts_summary["recovered"] == len(planned)
             else "filtered_by_recovery_or_language_review"
         ),
+        "decision_unit": decision_unit,
         "pipeline": "maestro_untrusted_orchestration",
         "scenario_mode": scenario_mode,
         "candidate_strategy": candidate_strategy,
@@ -1386,9 +1484,13 @@ def generate_turns(
             f"{summary['completed_branches']}/{summary['candidate_trials']} "
             f"| feedback rounds={summary['rounds_extracted_from_base']} "
             f"| selected={summary['candidates_selected_for_language_review']} "
-            f"| execution recovered={summary['execution_recovered_branches']} "
-            f"| incorrect={summary['incorrect']} "
-            f"| reviewed branches={summary['recovered']} "
-            f"| reviewed turns={summary['main_training_turns']}"
+            + (f"| 4A actionable={summary['single_turn_actionable']} "
+               if decision_unit == "single_turn"
+               else f"| execution recovered={summary['execution_recovered_branches']} ")
+            + f"| incorrect={summary['incorrect']} "
+            + (f"| accepted branches={summary['single_turn_accepted']} "
+               if decision_unit == "single_turn"
+               else f"| reviewed branches={summary['recovered']} ")
+            + f"| reviewed turns={summary['main_training_turns']}"
         )
     return summary
