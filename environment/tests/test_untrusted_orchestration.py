@@ -922,11 +922,8 @@ class RoundLocalRecoveryTests(unittest.TestCase):
         )
         self.assertEqual(
             audit["outcome"], "recovered",
-            "visible_issues=" + repr(audit.get("observable_issue_snapshots"))
-            + " / conflicts=" + repr(audit.get("runtime", {}).get("detected_conflicts"))
-            + " / decisions=" + repr(audit.get("decision_audit"))
-            + " / reports=" + repr(audit["subagent_report_reviews"])
-            + " / actions=" + repr(audit["main_action_reviews"]),
+            repr(audit["subagent_report_reviews"]) + " / " +
+            repr(audit["main_action_reviews"]),
         )
         self.assertTrue(turns)
         self.assertTrue(all(
