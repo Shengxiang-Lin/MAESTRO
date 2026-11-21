@@ -82,6 +82,9 @@ def _refresh_visible_claim_supervision(
     for step in episode["trajectory"]:
         if step.get("action") != "delegate_task":
             continue
+        if (step.get("result") or {}).get("pending"):
+            # Single-turn mode has a next action, not a returned batch.
+            continue
         number = step["attempt"]
         if observed_rounds is not None and number not in observed_rounds:
             continue
