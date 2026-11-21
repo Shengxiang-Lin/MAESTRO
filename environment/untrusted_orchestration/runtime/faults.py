@@ -258,6 +258,35 @@ def _report_fault_payload(clean: Relation, sources: dict, *,
     """Find a REAL same-field distractor from the task's granted sources."""
     if not clean.rows:
         return None
+    # An independently corroborated route claim is identified by its
+    # (route_key, entity_0) pair. Enumerate every source-backed alternative
+    # entity for every returned route, rather than coupling the row index
+    # and distractor index (which can skip most comparable claims).
+    # Mutate only the entity value: changing route_key would change the
+    # subject and make the two sibling reports incomparable.
+    if {"route_key", "entity_0"} <= set(clean.columns):
+        variants, seen = [], set()
+        for row_index, row in enumerate(clean.rows):
+            values = row["values"]
+            if not isinstance(values.get("route_key"), str):
+                continue
+            for sid, source in sorted(sources.items()):
+                for obs in source.get("observations", []):
+                    candidate = obs.get("values", {}).get("entity_0")
+                    if (candidate is None
+                            or str(candidate) == str(values.get("entity_0"))):
+                        continue
+                    key = (row_index, type(candidate).__name__,
+                           str(candidate), sid)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    variants.append({
+                        "field": "entity_0", "replacement": candidate,
+                        "row_index": row_index, "source_id": sid,
+                        "source_fact_refs": list(obs.get("fact_refs", [])),
+                    })
+        return variants[variant_index] if variant_index < len(variants) else None
     # Spread the finite variants across delivered records. A real value
     # from another row can be misassociated with this particular record.
     row_index = variant_index % len(clean.rows)

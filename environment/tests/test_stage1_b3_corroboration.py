@@ -145,6 +145,83 @@ class PublicCorroborationTests(unittest.TestCase):
             for row in successes
         ))
 
+    def test_b3_only_conflict_is_scheduled_without_internal_witness(self):
+        """A genuine B3 must not need a B1 issue to enter Main planning."""
+        state = self._state()
+        state.set_public_report(
+            "link_a", _report("ENT-A", "link_a"), round_number=3,
+        )
+        state.set_public_report(
+            "link_b", _report("ENT-B", "link_b"), round_number=3,
+        )
+        # No internal inconsistency or private Gold-based warning exists.
+        self.assertEqual(state.observable_issues(), [])
+        scheduling = state.scheduling_state()
+        issues = state.observable_issues()
+        conflicts = state.active_public_conflicts()
+        self.assertEqual(
+            [issue["kind"] for issue in issues], ["cross_source_conflict"],
+        )
+        self.assertEqual(
+            [event["kind"] for event in conflicts],
+            ["explicit_independent_claim_disagreement"],
+        )
+        self.assertIn("link_a", scheduling["repair"])
+        self.assertEqual(
+            classify_observable_scenario(issues, conflicts)["matched_scenarios"],
+            ["B3"],
+        )
+
+    def test_offline_b3_pilot_without_internal_conflict_detector(self):
+        """Do not rely on a simultaneous B1 to unlock a real B3 branch."""
+        from environment.tests.b3_corroboration_pilot import run_pilot
+        with patch.object(
+            ExecutionState, "_visible_report_internal_conflict",
+            return_value=None,
+        ):
+            summary = run_pilot(
+                target_scenes=1, max_scene_scan=20, max_fault_variants=24,
+            )
+        self.assertEqual(summary["observable_b3"], 1, summary["results"])
+        success = next(
+            row for row in summary["results"]
+            if row["status"] == "b3_observable"
+        )
+        self.assertNotIn("B1", success["realized"]["matched_scenarios"])
+        self.assertEqual(success["next_main_turns"], 1)
+
+    def test_route_fabrication_enumerates_all_rows_and_keeps_claim_key(self):
+        from environment.untrusted_orchestration.runtime.faults import (
+            _report_fault_payload,
+        )
+        clean = Relation(("route_key", "entity_0"), (
+            {"values": {"route_key": "route:A", "entity_0": "ENT-A"},
+             "support": ("link_a:F001",)},
+            {"values": {"route_key": "route:B", "entity_0": "ENT-B"},
+             "support": ("link_a:F002",)},
+        ))
+        sources = {"link_a": {"observations": [
+            {"values": {"route_key": "route:A", "entity_0": "ENT-A"},
+             "fact_refs": ["link_a:F001"]},
+            {"values": {"route_key": "route:B", "entity_0": "ENT-B"},
+             "fact_refs": ["link_a:F002"]},
+        ]}}
+        alternatives = [
+            _report_fault_payload(clean, sources, variant_index=i)
+            for i in range(2)
+        ]
+        self.assertEqual(
+            {row["row_index"] for row in alternatives}, {0, 1},
+        )
+        self.assertTrue(all(
+            row["field"] == "entity_0"
+            and row["source_fact_refs"][0].startswith("link_a:")
+            for row in alternatives
+        ))
+        self.assertIsNone(
+            _report_fault_payload(clean, sources, variant_index=2),
+        )
+
     def test_clean_independent_claims_are_not_conflicts(self):
         state = self._state()
         for sid in ("link_a", "link_b"):
