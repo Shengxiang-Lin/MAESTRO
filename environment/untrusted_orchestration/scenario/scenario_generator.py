@@ -29,11 +29,9 @@ def make_scenario(scene: dict, plan: dict) -> dict:
         "blueprint": "immediate_feedback_fault",
         "fault_atoms": atoms,
         "evidence_events": [],
-        "delayed_requested_but_unsupported": False,
         "acceptance": {
             "no_future_evidence": True,
             "real_source_distractors_only": True,
             "no_implicit_new_macro": True,
-            "actual_invalidations_audited": True,
         },
     }
