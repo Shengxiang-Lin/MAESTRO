@@ -26,6 +26,9 @@ from environment.untrusted_orchestration.reporting.contract import (
     build_report_contract, render_delivered_result,
 )
 from environment.untrusted_orchestration.state_machine import Attempt
+from environment.untrusted_orchestration.reporting.work_evidence import (
+    observed_work_checks, public_work_clauses, visible_filter_discrepancy,
+)
 
 runner = importlib.import_module(
     "environment.untrusted_orchestration.generate_turns"
@@ -46,6 +49,47 @@ def step(operation, identities, *, output_count=None):
             for key, marker in identities
         ],
     }
+
+
+class PublicFilterWitnessTests(unittest.TestCase):
+    def test_only_full_actual_filter_set_is_reported(self):
+        source = Relation(("case_id", "cue"), ({
+            "values": {"case_id": "Case-001", "cue": "valley"},
+            "support": ("M1_a:F1",),
+        }, {
+            "values": {"case_id": "Case-002", "cue": "ridge"},
+            "support": ("M1_a:F2",),
+        }))
+        filtered = Relation(("case_id", "cue"), ({
+            "values": {"case_id": "Case-001", "cue": "valley"},
+            "support": ("M1_a:F1",),
+        },))
+        checks = observed_work_checks(
+            {"op": "filter_eq"}, [source], filtered,
+        )
+        self.assertEqual(
+            checks, [{"kind": "filtered_case_keys", "case_ids": ["Case-001"]}],
+        )
+        prose = public_work_clauses([{"public_work_checks": checks}])[0]
+        self.assertIsNone(visible_filter_discrepancy(
+            prose, {"Case-001"},
+        ))
+        self.assertIn("Case-002", visible_filter_discrepancy(
+            prose, {"Case-002"},
+        ))
+        self.assertIsNone(visible_filter_discrepancy(
+            "The search returned records.", {"Case-002"},
+        ))
+
+    def test_incomplete_filter_previews_cannot_prove_absence(self):
+        source = Relation(("case_id", "cue"), tuple({
+            "values": {"case_id": f"Case-{i:03d}", "cue": "valley"},
+            "support": (f"M1_a:F{i}",),
+        } for i in range(10)))
+        checks = observed_work_checks(
+            {"op": "filter_eq"}, [source], source,
+        )
+        self.assertEqual(checks, [])
 
 
 class ReportObservationTests(unittest.TestCase):
