@@ -20,7 +20,6 @@ from environment.base_orchestration.trajectory_builder import (
     _strict_reports, clean_reference_identity, _main_local_terminal,
 )
 from environment.untrusted_orchestration.runtime.faults import Fault
-from environment.untrusted_orchestration.runtime.event_scheduler import EventScheduler
 from environment.untrusted_orchestration.runtime.evidence_planning import (
     schedule_evidence_requests,
 )
@@ -326,7 +325,6 @@ def build_branch(
         on_report_review=on_report_review,
     )
     state.cross_source_checks_enabled = True
-    scheduler = EventScheduler([], state=state, fork_round=branch_round)
     catalog = source_catalog(scene)
     graph = scene["macro_graph"]
     round_number = branch_round
@@ -357,7 +355,6 @@ def build_branch(
             tid for tid in scheduling["ready"]
             if tid not in repairs
         ]
-        ready = scheduler.available(ready, round_number)
         terminal = graph["terminal_task_id"]
         if terminal in ready and _main_local_terminal(graph) and not repairs:
             state.register(terminal)
@@ -496,7 +493,7 @@ def build_branch(
         "visible_claim_state": visible_claim_state,
         "observable_issue_snapshots": observable_issue_snapshots,
         "event_scenario": scenario_plan,
-        "event_timeline": scheduler.audit(),
+        "event_timeline": [],
         "fault_events_applied": [{
             "task_id": faults[0].task_id,
             "kind": faults[0].atom_kind or faults[0].mode,
