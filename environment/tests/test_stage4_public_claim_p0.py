@@ -77,6 +77,14 @@ class ResultInternalConflictTests(unittest.TestCase):
              "metric_a": 8},
         ])), [])
 
+    def test_different_observation_ids_abstain_even_with_shared_fact_refs(self):
+        self.assertEqual(result_internal_claim_conflicts(handoff([
+            {"entity_final": "Westmere District",
+             "observation_id": "obs-4ed84e565b05", "metric_a": 7},
+            {"entity_final": "Westmere District",
+             "observation_id": "obs-5eba5df7a9a3", "metric_a": 8},
+        ])), [])
+
     def test_numeric_equivalence_and_repeated_identical_values_not_fault(self):
         self.assertEqual(result_internal_claim_conflicts(handoff([
             {"entity_final": "Alderwick Valley", "metric_a": 1},
