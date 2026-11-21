@@ -157,7 +157,11 @@ def run_pilot(*, target_scenes: int = 2, max_scene_scan: int = 50,
             "candidate_attempts": attempts,
             "errors": errors[:5],
         })
-        if len(results) >= target_scenes:
+        # A structurally comparable scene is not guaranteed to admit
+        # a public conflict under the bounded, source-backed variants.
+        # Continue to the next naturally generated scene; keep every
+        # unsuccessful case in the report rather than relabeling it B3.
+        if sum(row["status"] == "b3_observable" for row in results) >= target_scenes:
             break
     return {
         "pilot_type": "offline_synthetic_motif_not_llm_reviewed",
