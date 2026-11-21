@@ -1,26 +1,25 @@
-# Stage-4 pilot: one Main next-decision per source-grounded latest fault.
-# MAESTRO trusted evidence -> untrusted Main decision training.
-# Pilot: first 10 Stage-1 Scenes + reviewed Stage-2 reports and Stage-3 clean episodes.
-# Stage 4 checks and reuses the actual Stage-3 Clean Reference.
+# Stage 4: one faulty latest Sub-Agent feedback batch -> one reviewed
+# Main next-decision (NOT a full multi-round recovery trajectory).
+# Only accepted Stage-3 Scenes are input; every Scene must match its frozen,
+# independently reviewed Stage-3 Clean Reference and Stage-2 reports.
 version: 1
 
 input:
-  scenes: environment/data/stage1/questions/scenes.jsonl
-  reports: environment/data/pilots/qwen_stage234_10/stage2/subtasks.jsonl
-  # Optional reviewed Stage-3 reference for exact clean/fault pairing.
-  # Null keeps deterministic Stage-4 bootstrap for independent experiments.
-  clean_episodes: environment/data/pilots/qwen_stage234_10/stage3/episodes.jsonl
+  scenes: environment/data/batches/candidate_500/stage3/accepted_scenes.jsonl
+  reports: environment/data/batches/candidate_500/stage2/subtasks.jsonl
+  clean_episodes: environment/data/batches/candidate_500/stage3/episodes.jsonl
 
 generation:
-  output_dir: environment/data/pilots/qwen_stage234_10/stage4
-  max_scenes: 10
-  branches_per_scene: null  # all legally returned Stage-3 feedback waves
+  output_dir: environment/data/batches/candidate_500/stage4
+  max_scenes: 500
+  branches_per_scene: null
   seed: 17
-  # Enumerate executable one-atom variants with provenance-grounded distractors.
-  max_candidates_per_round: null  # enumerate every executable one-atom fault
-  max_distractors_per_fault: null  # try all source-backed distractor variants
-  max_selected_per_round: null  # retain distinct public-witness decisions
-  target_main_turns: 10000  # global positive Main-decision budget, not episode count
+  # Production bounded enumeration: B3 targets are ordered before other classes.
+  # Change these only in a new output directory; caps limit candidate coverage.
+  max_candidates_per_round: 24
+  max_distractors_per_fault: 8
+  max_selected_per_round: 2
+  target_main_turns: 2000  # global positive Main-turn budget, not 2000 Scenes
   atomic_fault_kinds:
     - no_result
     - incomplete_retrieval
@@ -36,7 +35,7 @@ generation:
   max_retries: 1
   max_parallel_tasks: 4
   workers: 4
-  mode: llm              # reviewed Sub-Agent and Main language generation
+  mode: llm
   report_max_revisions: 2
   main_max_revisions: 2
   sub_model: local-qwen3.5-9b
@@ -44,22 +43,20 @@ generation:
   overwrite: false
   no_progress: false
 
-# Stage-4 Main reasoning Author + independent Critic.
 model:
   author_api_base: http://127.0.0.1:8807/v1
   author_model: local-qwen3.5-9b
-  critic_api_base: null  # inherit author_api_base
+  critic_api_base: null
   critic_model: local-qwen3.5-9b
   temperature: 0.1
   author_max_tokens: 2800
   critic_max_tokens: 1200
   api_key_env: null
 
-# Stage-4 Sub-Agent report naturalization Author + independent Critic.
 subagent_model:
   author_api_base: http://127.0.0.1:8807/v1
   author_model: local-qwen3.5-9b
-  critic_api_base: null  # inherit author_api_base
+  critic_api_base: null
   critic_model: local-qwen3.5-9b
   temperature: 0.1
   author_max_tokens: 2800

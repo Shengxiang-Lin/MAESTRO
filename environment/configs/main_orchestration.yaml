@@ -1,20 +1,20 @@
-# Stage-3 Qwen pilot: 10 Scene Clean References, using the same Stage-2 bank.
-# Base orchestration: trusted Main-Agent decisions from reviewed Sub-Agent reports.
-# All paths are relative to the MAESTRO repository root.
+# Stage 3: freeze dependency-safe dispatch and author only public,
+# evidence-grounded Main reasoning and scoped Sub-Agent task prose.
+# Accepted episodes and accepted_scenes.jsonl are rebuilt atomically from journals.
 version: 1
 
 input:
-  scenes: environment/data/stage1/questions/scenes.jsonl
-  reports: environment/data/pilots/qwen_stage234_10/stage2/subtasks.jsonl
+  scenes: environment/data/batches/candidate_500/stage1/questions/scenes.jsonl
+  reports: environment/data/batches/candidate_500/stage2/subtasks.jsonl
 
 generation:
-  output_dir: environment/data/pilots/qwen_stage234_10/stage3
-  max_scenes: 50  # select first 10 complete accepted Stage-2 Scenes in Stage-1 order
-  workers: 10
-  mode: llm           # llm or template
-  freeze_dispatch: true  # Freeze DAG batches/models/tools; LLM authors reasoning + scoped task prose
+  output_dir: environment/data/batches/candidate_500/stage3
+  max_scenes: 500
+  workers: 8
+  mode: llm
+  freeze_dispatch: true
   max_revisions: 2
-  max_attempts: 10
+  max_attempts: 16
   sub_model: local-qwen3.5-9b
   model_alias: model_1
   overwrite: false
@@ -24,7 +24,7 @@ generation:
 model:
   author_api_base: http://127.0.0.1:8807/v1
   author_model: local-qwen3.5-9b
-  critic_api_base: null  # null: same endpoint as author
+  critic_api_base: null
   critic_model: local-qwen3.5-9b
   api_key_env: null
   temperature: 0.1
