@@ -133,26 +133,28 @@ def analyze_scene_evidence_affordances(scene: dict) -> dict:
         if left in ancestors(right) or right in ancestors(left):
             continue
         left_sources, right_sources = sources(left), sources(right)
-        if left_sources & right_sources:
-            continue
         common = sorted(
             set(a["outputs"]["typed_relation"])
             & set(b["outputs"]["typed_relation"])
         )
         if not common:
             continue
-        fusion = is_common_join_consumer(left, right)
-        # The two independently source-scoped directory Macros each
-        # deliver a candidate's route_key -> entity_0 mapping. They are
-        # comparable even when a *later* verifier joins their rows.
-        # This is structural potential only: actual subject/scope equality
-        # must still be witnessed in delivered Stage-2/3 claims.
+        # Independent route mappings can share an upstream project-lookup
+        # scope without sharing the *direct* source observation supporting
+        # their entity_0 claims. This is only a structural affordance:
+        # actual B3 still requires two explicit, independently cited public
+        # claims about the same route. Other pairs with common ancestors
+        # remain excluded.
         sibling_reference_claims = (
             {"route_key", "entity_0"} <= set(common)
             and all(len(task["source_ids"]) == 1
                     and task.get("macro_role") == "association"
                     for task in (a, b))
+            and set(a["source_ids"]).isdisjoint(b["source_ids"])
         )
+        if left_sources & right_sources and not sibling_reference_claims:
+            continue
+        fusion = is_common_join_consumer(left, right)
         first, later = sorted((left, right), key=lambda tid: waves[tid])
         # This is a *structural potential*, not a claim that the later
         # source actually contradicts the earlier report.

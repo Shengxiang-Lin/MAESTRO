@@ -20,6 +20,24 @@ from environment.tests.stage4_fixtures import sample
 
 
 class CorroborationPlanTests(unittest.TestCase):
+    def test_shared_upstream_scope_does_not_hide_sibling_cross_check(self):
+        from environment.tests.current_stage1 import current_scene
+        from environment.untrusted_orchestration.inspection.evidence_affordances import (
+            analyze_scene_evidence_affordances,
+        )
+        test_scene = current_scene(1, "hard")
+        audit = analyze_scene_evidence_affordances(test_scene)
+        sibling_pairs = [
+            row for row in audit["candidate_relationships"]
+            if row["relationship"] == "potential_same_field_cross_check"
+            and set(row["shared_output_fields"]) >= {"route_key", "entity_0"}
+        ]
+        self.assertEqual(len(sibling_pairs), 1, audit)
+        self.assertTrue(sibling_pairs[0]["reported_in_same_reference_wave"])
+        self.assertTrue(set.intersection(*map(
+            set, sibling_pairs[0]["independent_source_scopes"],
+        )), "Fixture should exercise the shared upstream project scope")
+
     def test_independent_sources_deliver_sibling_reference_claims(self):
         needs = {
             "version": "maestro.evidence_plan.v1",
