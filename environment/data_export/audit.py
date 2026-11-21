@@ -57,7 +57,7 @@ def audit_dataset(cases: list[dict], decisions: list[dict],
     _check(len(decisions) == len(labels), "decision_teacher_count_mismatch")
     case_by_id = {}
     scenes = set()
-    recovered = set()
+    published = set()
     cases_by_kind, fault_by_kind = Counter(), Counter()
     for case in tqdm(cases, desc="Audit base Cases", unit="case",
                      disable=not progress, leave=False):
@@ -73,8 +73,11 @@ def audit_dataset(cases: list[dict], decisions: list[dict],
                    "clean_scene_identity")
             scenes.add(scene)
         else:
-            if (case.get("recovery") or {}).get("globally_recovered") is True:
-                recovered.add(identity)
+            recovery = case.get("recovery") or {}
+            if (recovery.get("decision_accepted") is True
+                    or (recovery.get("decision_accepted") is None
+                        and recovery.get("globally_recovered") is True)):
+                published.add(identity)
             atoms = (case.get("fault") or {}).get("atoms") or []
             if atoms and isinstance(atoms[0], dict):
                 fault_by_kind[str(atoms[0].get("kind", "unknown"))] += 1
@@ -118,7 +121,7 @@ def audit_dataset(cases: list[dict], decisions: list[dict],
         source = row.get("source")
         _check((source == "clean" and kind == "clean") or
                (source == "untrusted" and kind == "fault_injected" and
-                cid in recovered),
+                cid in published),
                "decision_is_not_published_positive:" + did)
         number = row.get("decision_round")
         _check(type(number) is int and number >= 1,

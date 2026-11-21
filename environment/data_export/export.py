@@ -121,8 +121,8 @@ def _case_for_branch(
     )
     if recorded is not None and recorded != clean["clean_reference_id"]:
         raise ValueError("stage4_private_clean_identity_mismatch")
-    if published and journal.get("status") != "recovered":
-        raise ValueError("stage4_published_case_not_recovered")
+    if published and journal.get("status") not in {"recovered", "single_turn_accepted"}:
+        raise ValueError("stage4_published_case_not_accepted")
     if published and audit.get("parallel_batches_verified") is not True:
         raise ValueError("stage4_published_case_not_dependency_safe")
     invalidations = (audit.get("runtime") or {}).get("invalidations") or []
@@ -152,7 +152,11 @@ def _case_for_branch(
         "recovery": {
             "publication_status": journal.get("status"),
             "execution_outcome": audit.get("execution_outcome"),
-            "globally_recovered": published,
+            "decision_accepted": published,
+            # Single-turn publication validates the next decision only; it
+            # never executes the pending Sub-Agent batch or proves recovery.
+            "globally_recovered": (published if journal.get("status") == "recovered"
+                                   else None),
             "counterfactual_unrepaired": deepcopy(
                 audit.get("counterfactual_unrepaired")
             ),
@@ -234,7 +238,7 @@ def _stage4_cases(stage4_dir: Path, scenes: dict, clean: dict,
             status_counts["no_episode"] += 1
         update_counts(number)
     if not set(published) <= {
-        c["case_id"] for c in cases if c["recovery"]["globally_recovered"]
+        c["case_id"] for c in cases if c["recovery"]["decision_accepted"]
     }:
         raise ValueError("unmatched_stage4_published_episodes")
     return cases, status_counts
@@ -381,7 +385,7 @@ def export_dataset(
     cases.extend(branches)
     accepted = {
         item["case_id"] for item in branches
-        if item["recovery"]["globally_recovered"]
+        if item["recovery"]["decision_accepted"]
     }
     states = {}
     path = stage4_dir / "private" / "decision_reward_states.jsonl"

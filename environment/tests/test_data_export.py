@@ -59,6 +59,33 @@ class FrozenSplitTests(unittest.TestCase):
             }), 1)
 
 
+class SingleTurnCaseSemanticsTests(unittest.TestCase):
+    def test_published_single_turn_is_not_claimed_to_be_globally_recovered(self):
+        from environment.data_export.export import _case_for_branch
+        scene = {"task_id": "scene-1", "question": "Check the evidence"}
+        clean = {"clean_reference_id": "clean-1"}
+        sample_id = "scene-1-fork-round-02-candidate-001"
+        entry = {"round_sample_id": sample_id, "main_decision_round": 2}
+        journal = {
+            "task_id": "scene-1",
+            "round_sample_id": sample_id,
+            "status": "single_turn_accepted",
+            "episode": {
+                "task_id": "scene-1", "branch_round": 2,
+                "clean_reference_id": "clean-1",
+                "format": "maestro_untrusted_single_turn.v1",
+            },
+            "private_audit": {"parallel_batches_verified": True},
+        }
+        case = _case_for_branch(scene, clean, entry, journal, published=True)
+        self.assertTrue(case["recovery"]["decision_accepted"])
+        self.assertIsNone(case["recovery"]["globally_recovered"])
+        self.assertEqual(case["untrusted"]["publication_status"],
+                         "single_turn_accepted")
+        # Publication eligibility is independent of global recovery.
+        self.assertTrue(case["recovery"]["decision_accepted"])
+
+
 class PairedDatasetEndToEndTests(unittest.TestCase):
     def test_export_paired_case_and_views_from_original_journals(self):
         with TemporaryDirectory() as tmp:

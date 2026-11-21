@@ -18,6 +18,8 @@ from environment.implement_subtask.realize import realize_scene
 from environment.implement_subtask.reporting import code_owned_result
 from environment.base_orchestration.trajectory_builder import build_episode
 from environment.untrusted_orchestration.generate_turns import generate_turns
+from environment.data_export.export import export_dataset
+from environment.data_export.source_io import digest
 
 
 CASES = ((0, "medium"), (1, "hard"), (2, "medium"), (3, "hard"))
@@ -43,7 +45,7 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def run_pilot(output_dir: Path, *, count: int = 4,
-              feedback_rounds: int = 2, max_candidates: int = 12) -> dict:
+              feedback_rounds: int = 2) -> dict:
     if count not in range(1, len(CASES) + 1):
         raise ValueError("stage234_pilot_scene_count_out_of_range")
     if feedback_rounds not in range(1, 5):
@@ -96,6 +98,19 @@ def run_pilot(output_dir: Path, *, count: int = 4,
     _write_jsonl(output_dir / "stage2" / "subtasks.jsonl", reports)
     _write_jsonl(output_dir / "stage3" / "episodes.jsonl", episodes)
     _write_jsonl(output_dir / "stage3" / "main_turns.jsonl", turns)
+    # These frozen offline fixtures are generated directly through
+    # build_episode rather than the Stage-3 CLI. Supply the matching
+    # source manifest required by the canonical exporter, including
+    # its scene digest and exact O1 prompt settings.
+    (output_dir / "stage3" / "manifest.json").write_text(
+        json.dumps({
+            "scenes_sha256": digest(output_dir / "scenes.jsonl"),
+            "max_attempts": 16,
+            "sub_model": "qwen3-8b",
+            "model_alias": "model_1",
+        }, sort_keys=True),
+        encoding="utf-8",
+    )
 
     stage4 = generate_turns(
         scenes_path=output_dir / "scenes.jsonl",
@@ -103,10 +118,12 @@ def run_pilot(output_dir: Path, *, count: int = 4,
         clean_episodes_path=output_dir / "stage3" / "episodes.jsonl",
         output_dir=output_dir / "stage4",
         max_scenes=count, branches_per_scene=feedback_rounds,
-        seed=17, scenario_mode="event_driven",
+        seed=17, decision_unit="single_turn", scenario_mode="event_driven",
         atomic_fault_kinds=list(FAULTS),
         candidate_strategy="enumerate",
-        max_candidates_per_round=max_candidates,
+        # Exhaust feasible scenario targets in 4A; the smoke's expensive
+        # language work is still bounded by one selected candidate per wave.
+        max_candidates_per_round=None,
         max_distractors_per_fault=1,
         max_selected_per_round=1,
         max_language_attempts_per_round=1,
@@ -139,6 +156,27 @@ def run_pilot(output_dir: Path, *, count: int = 4,
     if any(e.get("clean_reference_id") != known[e["task_id"]]
            for e in public):
         raise RuntimeError("stage234_pilot_public_episode_reference_mismatch")
+    if (stage4["decision_unit"] != "single_turn"
+            or not public
+            or len(public) != stage4["single_turn_accepted"]
+            or any(e.get("format") != "maestro_untrusted_single_turn.v1"
+                   for e in public)
+            or stage4["published_single_turn_stage3_prior_history"].get(
+                "preserved", 0
+            ) != len(public)):
+        raise RuntimeError("stage234_pilot_single_turn_contract_failed")
+
+    unified = export_dataset(
+        scenes_path=output_dir / "scenes.jsonl",
+        clean_episodes_path=output_dir / "stage3" / "episodes.jsonl",
+        clean_turns_path=output_dir / "stage3" / "main_turns.jsonl",
+        stage4_dir=output_dir / "stage4",
+        output_dir=output_dir / "unified",
+        overwrite=True,
+    )
+    if (unified["accepted_fault_cases"] != len(public)
+            or unified["decision_sources"].get("untrusted") != len(public)):
+        raise RuntimeError("stage234_pilot_single_turn_export_mismatch")
 
     summary = {
         "mode": "offline_deterministic_no_llm",
@@ -147,7 +185,14 @@ def run_pilot(output_dir: Path, *, count: int = 4,
         "clean_episode_count": len(episodes),
         "clean_turn_count": len(turns),
         "clean_references_verified": len(prefix_checks),
+        "decision_unit": stage4["decision_unit"],
+        "unified_export_decisions": unified["decision_count"],
+        "unified_export_accepted_fault_cases": unified["accepted_fault_cases"],
         "fault_trials": stage4["candidate_trials"],
+        "published_scenario_types": stage4.get("published_scenario_types", {}),
+        "candidate_screening_outcomes": stage4.get(
+            "candidate_screening_outcomes", {}
+        ),
         "fault_feedback_rounds": stage4["rounds_extracted_from_base"],
         "paired_index_rows": len(pairs),
         "fault_kinds_planned": stage4.get("atomic_fault_kinds_planned", {}),
@@ -181,11 +226,9 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--count", type=int, default=4)
     parser.add_argument("--feedback-rounds", type=int, default=2)
-    parser.add_argument("--max-candidates", type=int, default=12)
     args = parser.parse_args()
     run_pilot(args.output_dir, count=args.count,
-              feedback_rounds=args.feedback_rounds,
-              max_candidates=args.max_candidates)
+              feedback_rounds=args.feedback_rounds)
 
 
 if __name__ == "__main__":

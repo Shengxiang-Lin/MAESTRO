@@ -54,5 +54,25 @@ Use a new output directory because code signatures differ. Confirm
 published A/B1/B2/B3 counts, review acceptance, single-turn output
 contract, no leakage of private labels and frozen Stage 3 history.
 
-Legacy recovery-episode support is retained strictly for older callers;
-it is not part of the current single-turn dataset.
+The maintained YAML/CLI accepts only `single_turn`. Obsolete
+`recovery_episode`, `max_post_fork_rounds`, `selection_strategy`, and
+`max_diagnostics_per_scene` options are rejected rather than silently
+accepted. Old generated datasets can be inspected without reusing the old
+runtime interface.
+
+## Selection diagnostics (single-turn)
+
+`private/candidate_selection.jsonl` has two separate decisions:
+
+- `selection_reason`: immutable Stage-4A visibility, legality, novelty and
+  scenario-budget classification (`target_scenario_not_publicly_realized`,
+  `duplicate_public_issue_and_action`, `single_turn_budget_reserve`,
+  `balanced_public_scenario_and_action`).
+- `language_review_selection_reason`: whether the candidate entered 4B/4C
+  as a primary or backfill attempt. An unselected candidate is **not** a
+  failed recovery: no future recovery episode is executed.
+
+`summary.json.candidate_screening_outcomes` classifies trials as
+`selected`, `no_public_witness`, `duplicate`, `budget_reserve`, or (when
+present) `target_mismatch`, `no_legal_action`, and `other_unselected`.
+Use this instead of the old `not_execution_recovered` label.
