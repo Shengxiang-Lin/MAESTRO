@@ -703,9 +703,17 @@ Do not pad a correct short identifier with invented facts merely to make
 the answer longer.
 All distinct entity identifiers, dates, measurements, scalar fields, and
 entity-to-value associations in exact_oracle_answer must be preserved
-verbatim in the answer, including when there are many rows. Use compact
-readable lists rather than machine JSON, and include the number of matched
-records when applicable. If you need to compare filters from multiple
+verbatim in the answer, including when there are many rows. Treat every
+opaque identifier (especially route:, PRJ-, ENT-, and Dossier-) as an
+indivisible literal: copy it character-for-character from exact_oracle_answer.
+Do not reconstruct a project identifier from a dossier suffix, normalize
+similar-looking route keys, or choose a more plausible record from the
+source descriptions. For multi-row handoffs, copy each original field/value
+pair together before paraphrasing any surrounding prose. A correct value
+mentioned only in SUMMARY or TRACE_SUMMARY does not repair an ANSWER that
+omits or changes it. Use compact readable lists rather than machine JSON,
+and include the number of matched records when applicable. If you need to
+compare filters from multiple
 sources, associate each condition with the specific source it came from.
 If this is an intermediate task, never claim future eligibility,
 comparisons or checks were completed. The complete evidence/provenance
@@ -927,6 +935,18 @@ def author_critic_report(
                     "objects are accepted only on an exact Oracle match."
                     if f.get("stage") == "guard"
                     and "answer_invalid_length_or_type" in f.get("errors", [])
+                    else
+                    "The ANSWER omitted or mistyped one or more exact frozen "
+                    "values listed in errors. Copy each missing literal "
+                    "character-for-character from exact_oracle_answer, "
+                    "keeping its original row/field association. Do not "
+                    "derive PRJ- keys from Dossier IDs, alter route: keys, "
+                    "or substitute values from contextual source examples. "
+                    "Recheck ANSWER itself, not only SUMMARY or TRACE_SUMMARY."
+                    if f.get("stage") == "guard"
+                    and any(str(issue).startswith(
+                        "answer_missing_required_values:"
+                    ) for issue in f.get("errors", []))
                     else None
                 ),
             } for f in failures[-2:]],

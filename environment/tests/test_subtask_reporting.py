@@ -466,6 +466,83 @@ class ReportingUnitTests(unittest.TestCase):
             "trace_summary", critic.calls[0]["candidate_finish"]
         )
 
+    def test_wrong_opaque_ids_trigger_specific_retry_without_fallback(self):
+        # Real frozen Task-Plan outputs: independently cited multi-row route
+        # handoff and an intermediate one-field project identifier.
+        sibling = next(
+            item for item in realize_scene(scene(1, "hard"))["macro_tasks"]
+            if item["authorized_source_ids"] == ["link_a"]
+            and set(item["output_schema"]) == {"route_key", "entity_0"}
+        )
+        project = next(
+            item for item in realize_scene(scene(42, "medium"))["macro_tasks"]
+            if item["output_schema"] == ["project_id"]
+        )
+
+        class TypoThenCorrect:
+            def __init__(self):
+                self.requests = []
+
+            def complete_json(self, system_prompt, user_prompt):
+                request = json.loads(user_prompt)
+                self.requests.append(request)
+                contract = request["frozen_task_and_evidence"]
+                answer = _mock_o1_draft(contract)
+                if len(self.requests) == 1:
+                    # Deliberately return a different opaque key even when
+                    # all the other grounded fields remain in place.
+                    literal = str(next(iter(contract["exact_oracle_answer"][0].values())))
+                    answer["answer"] = answer["answer"].replace(
+                        literal, literal + "-WRONG", 1
+                    )
+                return answer
+
+        for record in (sibling, project):
+            with self.subTest(fields=record["output_schema"]):
+                author, critic = TypoThenCorrect(), ReportCritic()
+                accepted, metadata = author_critic_report(
+                    record, question=None, author=author, critic=critic,
+                    max_revisions=1,
+                )
+                self.assertEqual(metadata["status"], "accepted", metadata)
+                self.assertEqual(metadata["attempts"], 2)
+                self.assertEqual(len(author.requests), 2)
+                feedback = author.requests[1]["previous_review_feedback"]
+                self.assertTrue(any(
+                    issue.startswith("answer_missing_required_values:")
+                    for item in feedback for issue in item["errors"]
+                ), feedback)
+                self.assertIn(
+                    "character-for-character", feedback[-1]["repair_hint"]
+                )
+                self.assertEqual(len(critic.calls), 1)
+                self.assertIsNotNone(accepted)
+
+        # A model that repeatedly changes an ID still fails the original
+        # guard and must never get a code-owned corrected public answer.
+        class AlwaysWrong:
+            def complete_json(self, system_prompt, user_prompt):
+                contract = json.loads(user_prompt)["frozen_task_and_evidence"]
+                answer = _mock_o1_draft(contract)
+                literal = str(next(iter(contract["exact_oracle_answer"][0].values())))
+                answer["answer"] = answer["answer"].replace(
+                    literal, literal + "-WRONG", 1
+                )
+                return answer
+
+        critic = ReportCritic()
+        accepted, metadata = author_critic_report(
+            sibling, question=None, author=AlwaysWrong(), critic=critic,
+            max_revisions=2,
+        )
+        self.assertIsNone(accepted)
+        self.assertEqual(metadata["status"], "failed")
+        self.assertEqual(len(metadata["failures"]), 3)
+        self.assertTrue(all(
+            failure["stage"] == "guard" for failure in metadata["failures"]
+        ))
+        self.assertEqual(critic.calls, [])
+
     def test_reviewed_sibling_route_reports_keep_public_citations(self):
         """Real Stage-2 Author/Critic reports must remain B3-comparable."""
         from environment.untrusted_orchestration.inspection.visible_claim_extraction import (
