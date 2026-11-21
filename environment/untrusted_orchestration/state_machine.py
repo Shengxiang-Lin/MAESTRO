@@ -1286,15 +1286,6 @@ class ExecutionState:
             return None
         return [row["values"] for row in attempt.product.rows]
 
-    def answer_matches_gold(self) -> bool:
-        actual = self.effective_answer()
-        if actual is None:
-            return False
-        def norm(rows):
-            return sorted(json.dumps(x, ensure_ascii=False, sort_keys=True)
-                          for x in rows)
-        return norm(actual) == norm(self.scene["gold_answer"])
-
     def audit(self) -> dict:
         return {
             "attempt_versions": {
