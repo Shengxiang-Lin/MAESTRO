@@ -923,7 +923,7 @@ def generate_turns(
             stage="main", subset=batch_plans,
         )
         attempted.update(active)
-            next_active = set()
+        next_active = set()
         successful = sum(
             published_recovery(i) for i in attempted
         )
@@ -998,79 +998,66 @@ def generate_turns(
         write(journal, plan, placeholder)
 
     for row in selection_rows:
-            index = row["candidate_index"]
-            row["selected_for_language_review"] = index in attempted
-            # Stage-4A screening is independent from subsequent language
-            # selection. Do not overwrite the observable-public-witness,
-            # duplicate or budget-reserve diagnosis with the old
-            # recovery_episode terminology.
-            row["language_review_selection_reason"] = (
-                "language_review_diagnostic"
-                if index in attempted and row.get("selection_purpose") == "diagnostic"
-                else "language_review_primary" if index in initial_selection
-                else "language_review_backfill_after_rejection"
-                if index in attempted
-                else "not_selected_for_language_review"
-            )
-            if index in attempted:
-                row["language_review_outcome"] = (
-                    saved(journal, by_index[index]) or {}
-                ).get("status")
-        if decision_unit == "single_turn":
-            # These disjoint counters describe the original, current-round
-            # Main-observable screening, not future execution recovery.
-            selection_stats["candidate_screening_outcomes"] = dict(sorted(
-                Counter(
-                    "selected" if row["selected_for_language_review"]
-                    else "no_public_witness"
-                    if row["realized_scenario"] is None
-                    else "target_mismatch"
-                    if row["selection_reason"] == "target_scenario_not_publicly_realized"
-                    else "no_legal_action"
-                    if row["selection_reason"] == "no_legal_current_decision_or_no_visible_issue"
-                    else "duplicate"
-                    if row["selection_reason"] == "duplicate_public_issue_and_action"
-                    else "budget_reserve"
-                    if row["recovery_rank"] is not None
-                    else "other_unselected"
-                    for row in selection_rows
-                ).items()
-            ))
-        if decision_unit == "single_turn":
-            selection_stats["target_realization_distribution"] = dict(sorted(
-                Counter(
-                    f"{row.get('target_scenario') or 'none'}->"
-                    f"{row.get('realized_scenario') or 'none'}"
-                    for row in selection_rows
-                ).items()
-            ))
-            selection_stats["no_public_witness_by_fault_kind"] = dict(sorted(
-                Counter(
-                    row["atom_kind"] for row in selection_rows
-                    if row["realized_scenario"] is None
-                ).items()
-            ))
-            selection_stats["budget_reserve_by_scenario"] = dict(sorted(
-                Counter(
-                    row["realized_scenario"] for row in selection_rows
-                    if (not row["selected_for_language_review"]
-                        and row["recovery_rank"] is not None)
-                ).items()
-            ))
-        selection_stats["candidates_selected_for_language_review"] = len(
-            attempted
+        index = row["candidate_index"]
+        row["selected_for_language_review"] = index in attempted
+        # Preserve 4A screening separately from 4B/4C review selection.
+        row["language_review_selection_reason"] = (
+            "language_review_primary" if index in initial_selection
+            else "language_review_backfill_after_rejection"
+            if index in attempted
+            else "not_selected_for_language_review"
         )
-        selection_stats["candidates_filtered_before_llm"] = (
-            len(planned) - len(attempted)
-        )
-        selection_stats["selected_behavior_distribution"] = dict(Counter(
-            row["category"] for row in selection_rows
-            if row["selected_for_language_review"]
-        ))
-        selection_stats["feedback_rounds_with_selected_candidates"] = len({
-            (row["question_id"], row["feedback_round"])
-            for row in selection_rows if row["selected_for_language_review"]
-        })
+        if index in attempted:
+            row["language_review_outcome"] = (
+                saved(journal, by_index[index]) or {}
+            ).get("status")
+    selection_stats["candidate_screening_outcomes"] = dict(sorted(
+        Counter(
+            "selected" if row["selected_for_language_review"]
+            else "no_public_witness" if row["realized_scenario"] is None
+            else "target_mismatch"
+            if row["selection_reason"] == "target_scenario_not_publicly_realized"
+            else "no_legal_action"
+            if row["selection_reason"] == "no_legal_current_decision_or_no_visible_issue"
+            else "duplicate"
+            if row["selection_reason"] == "duplicate_public_issue_and_action"
+            else "budget_reserve" if row["recovery_rank"] is not None
+            else "other_unselected"
+            for row in selection_rows
+        ).items()
+    ))
+    selection_stats["target_realization_distribution"] = dict(sorted(
+        Counter(
+            f"{row.get('target_scenario') or 'none'}->"
+            f"{row.get('realized_scenario') or 'none'}"
+            for row in selection_rows
+        ).items()
+    ))
+    selection_stats["no_public_witness_by_fault_kind"] = dict(sorted(
+        Counter(
+            row["atom_kind"] for row in selection_rows
+            if row["realized_scenario"] is None
+        ).items()
+    ))
+    selection_stats["budget_reserve_by_scenario"] = dict(sorted(
+        Counter(
+            row["realized_scenario"] for row in selection_rows
+            if not row["selected_for_language_review"]
+            and row["recovery_rank"] is not None
+        ).items()
+    ))
+    selection_stats["candidates_selected_for_language_review"] = len(attempted)
+    selection_stats["candidates_filtered_before_llm"] = (
+        len(planned) - len(attempted)
+    )
+    selection_stats["selected_behavior_distribution"] = dict(Counter(
+        row["category"] for row in selection_rows
+        if row["selected_for_language_review"]
+    ))
+    selection_stats["feedback_rounds_with_selected_candidates"] = len({
+        (row["question_id"], row["feedback_round"])
+        for row in selection_rows if row["selected_for_language_review"]
+    })
     selection_stats["candidate_language_backfill_attempts"] = len(
         attempted - initial_selection
     )
