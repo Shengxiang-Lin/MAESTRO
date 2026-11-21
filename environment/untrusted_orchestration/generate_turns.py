@@ -792,7 +792,8 @@ def generate_turns(
                 if stage == "simulation":
                     display = {
                         "recovered": counts["recovered"],
-                        "planned": counts["planned"],
+                        **({"planned": counts["planned"]}
+                           if decision_unit == "single_turn" else {}),
                         "incorrect": counts["incorrect"],
                         "unresolved": counts["unresolved"],
                         "skipped": counts["skipped"],
