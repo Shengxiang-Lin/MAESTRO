@@ -191,6 +191,42 @@ models:
       chat_template_kwargs:
         enable_thinking: true
 
+  # MAESTRO Stage2 Global-GRPO: original Qwen3-8B + PEFT LoRA checkpoint.
+  # Paths are repository-relative; launch the benchmark from the repo root.
+  # For a different training step, change lora_adapter_path here.
+  qwen3-8b-maestro-grpo-lora:
+    backend: vllm
+    model_path: "base_models/Qwen3-8B"
+    lora_adapter_path: "workspace/maestro_8b/checkpoints/stage2-global-grpo/checkpoint-200"
+    served_model_name: "qwen3-8b-maestro-grpo-lora"
+    lora_base_served_name: "qwen3-8b-maestro-grpo-base"
+    max_lora_rank: 32
+    host: "127.0.0.1"
+    port: 8812
+    gpus: [2]
+    tensor_parallel_size: 1
+    dtype: "bfloat16"
+    gpu_memory_utilization: 0.90
+    max_model_len: 16384
+    max_num_seqs: 4
+    max_num_batched_tokens: 4096
+    max_completion_tokens: 4096
+    temperature: 0.6
+    top_p: 0.95
+    reasoning_parser: "qwen3"
+    enforce_eager: true
+    reuse_existing: true
+    auto_start: true
+    startup_timeout: 900
+    shutdown_on_exit: true
+    log_file: "logs/vllm/qwen3-8b-maestro-grpo-lora.log"
+    env:
+      VLLM_USE_FLASHINFER_SAMPLER: "0"
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true
+
+
   # Example larger local model for multi-GPU Main/Sub-Agent experiments.
   # With gpus=[0,1], vLLM is launched with CUDA_VISIBLE_DEVICES=0,1 and TP=2.
   local-qwen-27b:
