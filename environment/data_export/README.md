@@ -153,10 +153,11 @@ This changes only the display, not the generated records or split policy.
 ## Single-turn publication semantics
 
 Current Stage 4 writes one reviewed Main next-decision per selected candidate,
-using journal status `single_turn_accepted`. The current runtime produces
-no full-recovery episode. The exporter continues to read older archived
-`recovered` datasets, but new Stage-4 Cases use
+using journal status `single_turn_accepted`. The current runtime and exporter
+do not accept old `recovered` episodes as new input. New Stage-4 Cases set
 `recovery.decision_accepted=true` and `recovery.globally_recovered=null`:
-there is no future Sub-Agent execution to evaluate.
+there is no future Sub-Agent execution to evaluate. Existing archived unified
+datasets remain unchanged on disk; regenerate new data with this single-turn
+schema and a fresh output directory.
 Dataset preparation should use `decision_accepted` when testing publication
 eligibility rather than treating null global recovery as failure.

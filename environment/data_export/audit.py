@@ -74,9 +74,7 @@ def audit_dataset(cases: list[dict], decisions: list[dict],
             scenes.add(scene)
         else:
             recovery = case.get("recovery") or {}
-            if (recovery.get("decision_accepted") is True
-                    or (recovery.get("decision_accepted") is None
-                        and recovery.get("globally_recovered") is True)):
+            if recovery.get("decision_accepted") is True:
                 published.add(identity)
             atoms = (case.get("fault") or {}).get("atoms") or []
             if atoms and isinstance(atoms[0], dict):

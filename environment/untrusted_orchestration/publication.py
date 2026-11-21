@@ -206,14 +206,14 @@ def _publish(output: Path, planned: list[dict],
             published_single_turn_prefix_preserved[
                 "preserved" if private.get(
                     "stage3_prior_history_preserved") is True else
-                "unverified_legacy"
+                "not_preserved"
             ] += 1
             published_single_turn_conflict_kinds.update(
                 event.get("kind", "unknown") for event in conflicts
             )
             if not isinstance(data.get("episode"), dict):
                 raise RuntimeError(
-                    "untrusted_recovered_branch_missing_public_episode"
+                    "single_turn_accepted_missing_public_episode"
                 )
             public_episode = deepcopy(data["episode"])
             # Truth labels belong in private audit, never public reviewed-turn.
