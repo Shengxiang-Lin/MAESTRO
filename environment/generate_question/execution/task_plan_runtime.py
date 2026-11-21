@@ -563,6 +563,17 @@ def compile_macro_solvers(spec: dict) -> dict:
                 "project", joined, fields=["entity_0"]
             )
             terminal = add("unique", projected)
+        elif op == "read_reference_candidates":
+            if len(parents) != 1 or len(task["source_scope"]) != 1:
+                raise ValueError("reference_candidates_need_one_project_and_source")
+            observed = add("scan", source_id=task["source_scope"][0])
+            scoped = add(
+                "join", parents[0], observed,
+                left_on="project_id", right_on="project_id",
+            )
+            terminal = add(
+                "project", scoped, fields=["route_key", "entity_0"],
+            )
         elif op == "reconcile_directories":
             if len(parents) != 1:
                 raise ValueError("reconciliation_needs_project")
@@ -585,10 +596,18 @@ def compile_macro_solvers(spec: dict) -> dict:
             )
         elif op == "verify_real_fork":
             if task["source_scope"] == ["event_ledger", "real_fork"]:
-                # New grouped verification: the event-eligibility evidence
-                # belongs to this separate Main-visible verification Macro.
-                # parents[0] is project_id, parents[1] candidate entity_0.
-                if len(parents) != 2:
+                # The sibling reference Macros independently report the
+                # route_key -> entity_0 candidates. Their intersection is
+                # required for this verifier, not a synthetic duplicate task.
+                # Historical frozen scenes keep the prior two-parent route.
+                if len(parents) == 3:
+                    candidates = add(
+                        "join", parents[1], parents[2],
+                        left_on="route_key", right_on="route_key",
+                    )
+                elif len(parents) == 2:
+                    candidates = parents[1]
+                else:
                     raise ValueError("verification_needs_project_and_candidates")
                 observed = add("scan", source_id="event_ledger")
                 condition = plan["condition"]
@@ -601,7 +620,7 @@ def compile_macro_solvers(spec: dict) -> dict:
                     left_on="project_id", right_on="project_id",
                 )
                 real = add(
-                    "lookup_by_key", parents[1], source_id="real_fork",
+                    "lookup_by_key", candidates, source_id="real_fork",
                     input_key_field="entity_0", source_key_field="entity_0",
                 )
                 joined = add(
