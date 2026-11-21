@@ -100,6 +100,15 @@ def parser() -> argparse.ArgumentParser:
     return root
 
 
+def _cli_overrides(cli: argparse.Namespace, names: tuple[tuple[str, str], ...]) -> dict:
+    """Forward only explicitly supplied command-line overrides to a stage."""
+    return {
+        dest: value
+        for source, dest in names
+        if (value := getattr(cli, source)) is not None
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     p = parser()
     cli = p.parse_args(argv)
@@ -127,15 +136,11 @@ def main(argv: list[str] | None = None) -> int:
               f"{options['output_dir']}/summary.json")
         return 0 if result["status"] in {"done", "partial"} else 1
     if cli.command == "generate-main-turns":
-        overrides = {}
-        for cli_name, option in (
+        overrides = _cli_overrides(cli, (
             ("scenes", "scenes_path"), ("reports", "reports_path"),
             ("output_dir", "output_dir"), ("max_scenes", "max_scenes"),
             ("workers", "workers"), ("mode", "mode"),
-        ):
-            value = getattr(cli, cli_name)
-            if value is not None:
-                overrides[option] = value
+        ))
         if cli.no_progress:
             overrides["no_progress"] = True
         summary = generate_main_from_config(cli.config, **overrides)
@@ -146,17 +151,13 @@ def main(argv: list[str] | None = None) -> int:
               f"{out}/summary.json")
         return 0 if summary["status"] in {"done", "partial"} else 1
     if cli.command == "generate-untrusted-turns":
-        overrides = {}
-        for cli_name, option in (
+        overrides = _cli_overrides(cli, (
             ("scenes", "scenes_path"), ("reports", "reports_path"),
             ("output_dir", "output_dir"), ("max_scenes", "max_scenes"),
             ("branches_per_scene", "branches_per_scene"),
             ("workers", "workers"), ("mode", "mode"),
             ("target_main_turns", "target_main_turns"),
-        ):
-            value = getattr(cli, cli_name)
-            if value is not None:
-                overrides[option] = value
+        ))
         if cli.overwrite:
             overrides["overwrite"] = True
         if cli.no_progress:
